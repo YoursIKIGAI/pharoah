@@ -1,0 +1,19 @@
+# Compiled build artifacts
+target/
+*.class
+
+# SQLite runtime database files
+*.db
+*.db-journal
+
+# IDE and Editor files
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# Operating System files
+Thumbs.db
+.DS_Store
