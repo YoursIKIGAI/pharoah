@@ -1,0 +1,43 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "👑 PHAROAH: Interactive Terminal Shell",
+            "request": "launch",
+            "mainClass": "com.pharoah.app.PharoahApplication",
+            "projectName": "pharoah-core",
+            "console": "integratedTerminal",
+            "classPaths": [
+                "${workspaceFolder}/target/classes",
+                "${workspaceFolder}/lib/*"
+            ]
+        },
+        {
+            "type": "java",
+            "name": "🚀 PHAROAH: Automated Demo Walkthrough",
+            "request": "launch",
+            "mainClass": "com.pharoah.app.PharoahApplication",
+            "projectName": "pharoah-core",
+            "args": ["--demo"],
+            "console": "integratedTerminal",
+            "classPaths": [
+                "${workspaceFolder}/target/classes",
+                "${workspaceFolder}/lib/*"
+            ]
+        },
+        {
+            "type": "java",
+            "name": "⚡ PHAROAH: System Status Check",
+            "request": "launch",
+            "mainClass": "com.pharoah.app.PharoahApplication",
+            "projectName": "pharoah-core",
+            "args": ["status"],
+            "console": "integratedTerminal",
+            "classPaths": [
+                "${workspaceFolder}/target/classes",
+                "${workspaceFolder}/lib/*"
+            ]
+        }
+    ]
+}

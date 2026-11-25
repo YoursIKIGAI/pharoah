@@ -1,0 +1,41 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "👑 Run PHAROAH Interactive Terminal",
+            "type": "shell",
+            "command": "java -cp \"target/classes;lib/*\" com.pharoah.app.PharoahApplication",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": true
+            }
+        },
+        {
+            "label": "🚀 Run PHAROAH Automated Demo",
+            "type": "shell",
+            "command": "java -cp \"target/classes;lib/*\" com.pharoah.app.PharoahApplication --demo",
+            "group": "test",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": true
+            }
+        },
+        {
+            "label": "🔨 Compile All Java Files",
+            "type": "shell",
+            "command": "javac -cp \"lib/*\" -d target/classes (Get-ChildItem -Path src/main/java, src/test/java -Filter *.java -Recurse | Select-Object -ExpandProperty FullName)",
+            "problemMatcher": ["$javac"],
+            "presentation": {
+                "reveal": "silent"
+            }
+        }
+    ]
+}
