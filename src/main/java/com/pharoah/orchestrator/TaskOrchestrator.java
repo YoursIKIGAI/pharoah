@@ -1,148 +1,207 @@
 package com.pharoah.orchestrator;
 
-import com.pharoah.agents.Agent;
+import com.pharoah.agent.AgentConfig;
+import com.pharoah.agent.AgentRole;
+import com.pharoah.agent.AgentService;
+import com.pharoah.ai.AIService;
 import com.pharoah.concurrency.ThreadPoolManager;
+import com.pharoah.core.enums.Priority;
 import com.pharoah.core.enums.TaskStatus;
+import com.pharoah.core.enums.TaskType;
 import com.pharoah.core.model.Task;
 import com.pharoah.core.model.TaskResult;
-import com.pharoah.knowledge.SubjectContextManager;
-import com.pharoah.knowledge.SubjectMemory;
 import com.pharoah.persistence.dao.TaskDao;
 import com.pharoah.tasks.TaskManager;
 
 import java.sql.SQLException;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 
-/**
- * The Central Brain of PHAROAH: Multi-Agent Orchestrator.
- * 
- * Coordinates:
- * 1. Task Intake & Validation.
- * 2. Polymorphic Agent Selection: Maps tasks to the best suited agent in the swarm.
- * 3. Asynchronous Concurrency: Executes tasks in parallel using ThreadPoolManager.
- * 4. Context Isolation: Supplies the correct SubjectMemory without cross-talk.
- * 5. Persistent State Synchronization: Updates SQLite database via TaskDao.
- */
+// VARIJ: Implemented TaskOrchestrator.
+// The central multi-agent coordinator: task decomposition, dependency checking,
+// concurrent thread pool delegation, human review enforcement, and MOCK vs REAL AI distinction.
 public class TaskOrchestrator {
 
     private final TaskManager taskManager;
     private final ThreadPoolManager poolManager;
-    private final SubjectContextManager contextManager;
     private final TaskDao taskDao;
-    private final com.pharoah.persistence.dao.SubjectDao subjectDao;
-    private final List<Agent> registeredAgents = new ArrayList<>();
+    private final AgentService agentService;
+    private final AIService aiService;
 
     public TaskOrchestrator(TaskManager taskManager,
                             ThreadPoolManager poolManager,
-                            SubjectContextManager contextManager,
                             TaskDao taskDao,
-                            com.pharoah.persistence.dao.SubjectDao subjectDao) {
+                            AgentService agentService,
+                            AIService aiService) {
         this.taskManager = taskManager;
         this.poolManager = poolManager;
-        this.contextManager = contextManager;
         this.taskDao = taskDao;
-        this.subjectDao = subjectDao;
+        this.agentService = agentService;
+        this.aiService = aiService;
     }
 
-    public TaskOrchestrator(TaskManager taskManager,
-                            ThreadPoolManager poolManager,
-                            SubjectContextManager contextManager,
-                            TaskDao taskDao) {
-        this(taskManager, poolManager, contextManager, taskDao, null);
+    // VARIJ: Decomposes a large intellectual objective into smaller dependent tasks
+    public List<Task> decomposeObjective(String projectId, String objectiveTitle, String domainTopic) throws SQLException {
+        List<Task> subtasks = new ArrayList<>();
+
+        // 1. Research Task
+        Task t1 = new Task(projectId, "Survey & Literature Review: " + objectiveTitle,
+                TaskType.RESEARCH, Priority.HIGH,
+                "Extract theoretical background, existing methodologies, and research gaps for: " + domainTopic,
+                "agent-01", null);
+        taskDao.insertTask(t1);
+        subtasks.add(t1);
+
+        // 2. Technical Analysis Task (Depends on Research Task)
+        Task t2 = new Task(projectId, "Comparative & Empirical Analysis: " + objectiveTitle,
+                TaskType.COMPARISON, Priority.HIGH,
+                "Compare architectural paradigms, performance metrics, and trade-offs for: " + domainTopic,
+                "agent-03", t1.getTaskId());
+        taskDao.insertTask(t2);
+        subtasks.add(t2);
+
+        // 3. Technical Composition Task (Depends on Analysis)
+        Task t3 = new Task(projectId, "Draft Main Report & Synthesis: " + objectiveTitle,
+                TaskType.WRITING, Priority.MEDIUM,
+                "Synthesize findings, implementation roadmap, and conclusions for: " + domainTopic,
+                "agent-02", t2.getTaskId());
+        taskDao.insertTask(t3);
+        subtasks.add(t3);
+
+        // 4. Quality Review Task (Depends on Composition)
+        Task t4 = new Task(projectId, "Peer Review & Verification: " + objectiveTitle,
+                TaskType.VERIFICATION, Priority.MEDIUM,
+                "Verify factual claims, check citations, and validate accuracy for: " + domainTopic,
+                "agent-06", t3.getTaskId());
+        taskDao.insertTask(t4);
+        subtasks.add(t4);
+
+        return subtasks;
     }
 
-    /**
-     * Registers a specialized agent into the orchestrator swarm.
-     */
-    public synchronized void registerAgent(Agent agent) {
-        if (agent != null) {
-            registeredAgents.add(agent);
-            System.out.printf("[ORCHESTRATOR] Registered agent: %s (%s)\n",
-                    agent.getName(), agent.getDescription());
-        }
-    }
-
-    /**
-     * Polymorphically discovers the best agent equipped to handle the task.
-     */
-    public synchronized Optional<Agent> selectAgent(Task task) {
-        for (Agent agent : registeredAgents) {
-            if (agent.canHandle(task.getType())) {
-                return Optional.of(agent);
+    // VARIJ: Submits a single task asynchronously while enforcing dependency checks
+    public Future<TaskResult> submitTaskAsync(Task task) throws SQLException {
+        // Enforce Dependency Check
+        if (task.getDependsOnTaskId() != null && !task.getDependsOnTaskId().trim().isEmpty()) {
+            Task prerequisite = taskDao.findById(task.getDependsOnTaskId());
+            if (prerequisite != null && prerequisite.getStatus() != TaskStatus.COMPLETED) {
+                System.out.printf("[DEPENDENCY GUARD] Task '%s' is blocked waiting for prerequisite '%s' (Status: %s).\n",
+                        task.getTitle(), prerequisite.getTitle(), prerequisite.getStatus());
+                task.updateStatus(TaskStatus.PENDING);
+                taskDao.updateTask(task);
+                return poolManager.submitTask(() -> TaskResult.failure(task.getTaskId(), "Blocked by incomplete prerequisite: " + prerequisite.getTitle(), 0, "DependencyGuard"));
             }
         }
-        return Optional.empty();
-    }
 
-    /**
-     * Submits a task for asynchronous execution across worker threads.
-     * Returns a Future yielding the eventual TaskResult.
-     */
-    public Future<TaskResult> submitTaskAsync(Task task) {
-        // 1. Submit to Collection Manager
         taskManager.submitTask(task);
 
-        // 2. Persist to Relational Database (if DAO available)
-        if (taskDao != null) {
-            try {
-                if (subjectDao != null && task.getSubjectId() != null) {
-                    if (subjectDao.findByName(task.getSubjectId()) == null) {
-                        subjectDao.insertSubject(new com.pharoah.core.model.Subject(task.getSubjectId(), task.getSubjectId(), "Auto-created workspace", null));
-                    }
-                }
-                taskDao.insertTask(task);
-            } catch (SQLException e) {
-                System.err.println("[ORCHESTRATOR DB WARN] Failed to persist queued task: " + e.getMessage());
-            }
-        }
-
-        // 3. Delegate to ThreadPoolManager as Callable
         return poolManager.submitTask(() -> {
-            Agent agent = selectAgent(task)
-                    .orElseThrow(() -> new IllegalStateException("No registered agent found for: " + task.getType()));
-
-            SubjectMemory memory = contextManager.getOrCreateMemory(task.getSubjectId());
-
+            long startTime = System.currentTimeMillis();
             task.updateStatus(TaskStatus.IN_PROGRESS);
+            taskDao.updateTask(task);
 
-            // Execute agent
-            TaskResult result = agent.execute(task, memory);
-
-            // Update in-memory collections
-            taskManager.completeTask(task.getTaskId(), result);
-
-            // Update database
-            if (taskDao != null) {
-                try {
-                    taskDao.updateTask(task);
-                } catch (SQLException e) {
-                    System.err.println("[ORCHESTRATOR DB WARN] Failed to update completed task: " + e.getMessage());
-                }
+            // Select agent
+            AgentConfig agent = null;
+            if (task.getAssignedAgentId() != null) {
+                agent = agentService.getAgentById(task.getAssignedAgentId());
             }
+            if (agent == null) {
+                AgentRole targetRole = mapTaskTypeToRole(task.getType());
+                agent = agentService.findBestAgentForRole(targetRole).orElse(null);
+            }
+
+            String agentName = (agent != null) ? agent.getName() : "General Swarm Worker";
+            String providerType = (agent != null) ? agent.getProviderType() : "MOCK_HEURISTIC";
+
+            System.out.printf("[ORCHESTRATOR] Delegating '%s' to %s [%s]...\n",
+                    task.getTitle(), agentName, providerType);
+
+            // Execute intelligence
+            String rawOutput = executeIntelligence(task, agent);
+            long duration = System.currentTimeMillis() - startTime;
+
+            // Prepend clear labeling to distinguish Mock vs Real AI
+            String labeledOutput = String.format("""
+                %s
+                **Executing Agent:** %s (Role: %s)
+                **Execution Latency:** %d ms
+                
+                %s
+                """,
+                    agent != null && agent.isMock() ? "⚠️ **[MOCK / HEURISTIC AGENT EXECUTION - SIMULATED OUTPUT]**" : "🤖 **[REAL AI AGENT EXECUTION: " + providerType + "]**",
+                    agentName,
+                    (agent != null ? agent.getRole().getDisplayName() : "Worker"),
+                    duration,
+                    rawOutput);
+
+            // Human review gate: Send to UNDER_REVIEW
+            task.markUnderReview(labeledOutput);
+            task.setAssignedAgentId(agent != null ? agent.getAgentId() : null);
+            taskDao.updateTask(task);
+
+            TaskResult result = TaskResult.success(task.getTaskId(), labeledOutput, duration, agentName);
+            taskManager.completeTask(task.getTaskId(), result);
 
             return result;
         });
     }
 
-    /**
-     * Executes a batch of tasks in parallel, waiting for all to complete.
-     */
-    public List<TaskResult> executeBatchParallel(List<Task> tasks) throws Exception {
+    // VARIJ: Synthesizes intellectual content via AIService
+    private String executeIntelligence(Task task, AgentConfig agent) {
+        String prompt = task.getInputPayload();
+        String context = (agent != null) ? agent.getInstructions() : "Standard academic guidelines";
+
+        return switch (task.getType()) {
+            case RESEARCH -> aiService.synthesizeResearch(task.getTitle(), prompt + "\nContext: " + context);
+            case COMPARISON -> {
+                String[] parts = task.getTitle().split("(?i)\\s+(vs\\.?|versus|against)\\s+");
+                String a = parts.length > 0 ? parts[0] : "Option A";
+                String b = parts.length > 1 ? parts[1] : "Option B";
+                yield aiService.generateComparison(a, b, prompt);
+            }
+            case WRITING -> aiService.generateWriting(prompt, "Academic & Technical", context);
+            case VERIFICATION -> aiService.verifyClaims(task.getTitle(), prompt);
+            case STUDY_ASSISTANCE -> aiService.generateStudyAid(task.getTitle(), prompt);
+            case PLANNING -> aiService.generatePlan(task.getTitle(), prompt);
+            case DATA_ANALYSIS -> aiService.analyzeData(prompt);
+            case DOCUMENT_ANALYSIS -> aiService.generateSummary(prompt, 5);
+            case CODING -> String.format("""
+                ### 💻 Code Analysis & Implementation Specification: %s
+                * **Language / Platform:** Java 21 LTS
+                * **Component:** %s
+                * **Implementation Guidelines:**
+                  ```java
+                  // Implementation guideline for: %s
+                  public class ImplementationSnippet {
+                      // Thread-safe modular logic
+                  }
+                  ```
+                """, task.getTitle(), prompt, task.getTitle());
+        };
+    }
+
+    private AgentRole mapTaskTypeToRole(TaskType type) {
+        return switch (type) {
+            case RESEARCH -> AgentRole.RESEARCH_AGENT;
+            case WRITING -> AgentRole.WRITING_AGENT;
+            case COMPARISON, DATA_ANALYSIS -> AgentRole.ANALYSIS_AGENT;
+            case CODING -> AgentRole.CODING_AGENT;
+            case DOCUMENT_ANALYSIS -> AgentRole.DOCUMENTATION_AGENT;
+            case VERIFICATION -> AgentRole.REVIEWER_AGENT;
+            case PLANNING, STUDY_ASSISTANCE -> AgentRole.PLANNING_AGENT;
+        };
+    }
+
+    public List<TaskResult> executeBatch(List<Task> tasks) throws Exception {
         List<Future<TaskResult>> futures = new ArrayList<>();
         for (Task t : tasks) {
             futures.add(submitTaskAsync(t));
         }
 
         List<TaskResult> results = new ArrayList<>();
-        for (Future<TaskResult> future : futures) {
-            results.add(future.get());
+        for (Future<TaskResult> f : futures) {
+            results.add(f.get());
         }
         return results;
-    }
-
-    public List<Agent> getRegisteredAgents() {
-        return Collections.unmodifiableList(registeredAgents);
     }
 }

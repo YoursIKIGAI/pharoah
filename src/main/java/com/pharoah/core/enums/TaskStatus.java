@@ -1,15 +1,15 @@
 package com.pharoah.core.enums;
 
-/**
- * Tracks the lifecycle states of a task in PHAROAH.
- */
+// SANCHIT: Implemented TaskStatus enum.
+// Tracks the complete lifecycle of tasks including human review approval.
 public enum TaskStatus {
-    PENDING("Created, awaiting submission"),
-    QUEUED("Placed in queue for worker scheduling"),
+    PENDING("Task created and waiting in backlog"),
+    QUEUED("Task placed in queue for worker scheduling"),
     IN_PROGRESS("Currently being processed by an agent"),
-    COMPLETED("Successfully finished with final output"),
-    FAILED("Execution encountered an unrecoverable error"),
-    CANCELLED("Manually aborted by user or orchestrator");
+    UNDER_REVIEW("Execution completed; awaiting human review and approval"),
+    COMPLETED("Reviewed and approved as complete"),
+    FAILED("Execution encountered an error or was rejected"),
+    CANCELLED("Aborted by the user");
 
     private final String description;
 

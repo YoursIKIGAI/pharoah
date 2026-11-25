@@ -8,40 +8,31 @@ import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
 
-/**
- * Domain entity representing an intellectual task submitted to PHAROAH.
- * 
- * Demonstrates Core Java concepts:
- * 1. OOP Encapsulation: Private state guarded with getters and business validation.
- * 2. Comparable interface: Implements natural ordering for PriorityQueue scheduling.
- * 3. equals() & hashCode() contract: Ensures consistent behavior inside Hash-based collections (HashSet, HashMap).
- */
+// SANCHIT & VARIJ: Implemented Task domain entity.
+// Supports priority scheduling, project association, assigned agent, and task dependencies.
 public class Task implements Comparable<Task> {
 
     private final String taskId;
+    private final String projectId;
     private final String title;
     private final TaskType type;
     private final Priority priority;
     private final String inputPayload;
-    private final String subjectId; // Optional: Link to a specific Subject Knowledge Space
+    private final String dependsOnTaskId; // ID of prerequisite task
     private final LocalDateTime createdAt;
 
+    private String assignedAgentId;
     private TaskStatus status;
     private String finalOutput;
+    private String reviewNotes;
     private LocalDateTime completedAt;
 
-    /**
-     * Constructor to create a new task with automatic unique ID generation.
-     *
-     * @param title        Brief title describing the work.
-     * @param type         Category of task (e.g. RESEARCH, COMPARISON).
-     * @param priority     Urgency level (HIGH, MEDIUM, LOW).
-     * @param inputPayload Detailed instructions or document text to process.
-     * @param subjectId    Optional identifier linking to a Subject Knowledge Space.
-     */
-    public Task(String title, TaskType type, Priority priority, String inputPayload, String subjectId) {
+    public Task(String taskId, String projectId, String title, TaskType type, Priority priority,
+                String inputPayload, String assignedAgentId, String dependsOnTaskId,
+                TaskStatus status, String finalOutput, String reviewNotes,
+                LocalDateTime createdAt, LocalDateTime completedAt) {
         if (title == null || title.trim().isEmpty()) {
-            throw new IllegalArgumentException("Task title cannot be null or empty.");
+            throw new IllegalArgumentException("Task title cannot be empty.");
         }
         if (type == null) {
             throw new IllegalArgumentException("TaskType cannot be null.");
@@ -49,31 +40,44 @@ public class Task implements Comparable<Task> {
         if (priority == null) {
             throw new IllegalArgumentException("Priority cannot be null.");
         }
-        if (inputPayload == null || inputPayload.trim().isEmpty()) {
-            throw new IllegalArgumentException("Task input payload cannot be null or empty.");
-        }
 
-        this.taskId = UUID.randomUUID().toString();
+        this.taskId = (taskId != null && !taskId.trim().isEmpty()) ? taskId : UUID.randomUUID().toString();
+        this.projectId = (projectId != null && !projectId.trim().isEmpty()) ? projectId.trim() : "GLOBAL";
         this.title = title.trim();
         this.type = type;
         this.priority = priority;
-        this.inputPayload = inputPayload.trim();
-        this.subjectId = (subjectId != null && !subjectId.trim().isEmpty()) ? subjectId.trim() : "GENERAL";
-        this.createdAt = LocalDateTime.now();
-        this.status = TaskStatus.PENDING;
+        this.inputPayload = (inputPayload != null) ? inputPayload.trim() : "";
+        this.assignedAgentId = assignedAgentId;
+        this.dependsOnTaskId = dependsOnTaskId;
+        this.status = (status != null) ? status : TaskStatus.PENDING;
+        this.finalOutput = finalOutput;
+        this.reviewNotes = reviewNotes;
+        this.createdAt = (createdAt != null) ? createdAt : LocalDateTime.now();
+        this.completedAt = completedAt;
     }
 
-    /**
-     * Overloaded convenience constructor for standalone general tasks.
-     */
+    public Task(String projectId, String title, TaskType type, Priority priority, String inputPayload, String assignedAgentId, String dependsOnTaskId) {
+        this(UUID.randomUUID().toString(), projectId, title, type, priority, inputPayload, assignedAgentId, dependsOnTaskId, TaskStatus.PENDING, null, null, LocalDateTime.now(), null);
+    }
+
+    public Task(String title, TaskType type, Priority priority, String inputPayload, String projectId) {
+        this(UUID.randomUUID().toString(), projectId, title, type, priority, inputPayload, null, null, TaskStatus.PENDING, null, null, LocalDateTime.now(), null);
+    }
+
     public Task(String title, TaskType type, Priority priority, String inputPayload) {
-        this(title, type, priority, inputPayload, "GENERAL");
+        this(title, type, priority, inputPayload, "GLOBAL");
     }
-
-    // ================= Getters =================
 
     public String getTaskId() {
         return taskId;
+    }
+
+    public String getProjectId() {
+        return projectId;
+    }
+
+    public String getSubjectId() {
+        return projectId; // Backwards compatibility alias for subject/project workspace
     }
 
     public String getTitle() {
@@ -92,8 +96,16 @@ public class Task implements Comparable<Task> {
         return inputPayload;
     }
 
-    public String getSubjectId() {
-        return subjectId;
+    public String getAssignedAgentId() {
+        return assignedAgentId;
+    }
+
+    public void setAssignedAgentId(String assignedAgentId) {
+        this.assignedAgentId = assignedAgentId;
+    }
+
+    public String getDependsOnTaskId() {
+        return dependsOnTaskId;
     }
 
     public LocalDateTime getCreatedAt() {
@@ -104,21 +116,28 @@ public class Task implements Comparable<Task> {
         return status;
     }
 
+    public void updateStatus(TaskStatus status) {
+        this.status = status;
+    }
+
     public String getFinalOutput() {
         return finalOutput;
     }
 
-    public LocalDateTime getCompletedAt() {
-        return completedAt;
+    public void setFinalOutput(String finalOutput) {
+        this.finalOutput = finalOutput;
     }
 
-    // ================= Business State Transitions =================
+    public String getReviewNotes() {
+        return reviewNotes;
+    }
 
-    public void updateStatus(TaskStatus newStatus) {
-        if (newStatus == null) {
-            throw new IllegalArgumentException("New status cannot be null.");
-        }
-        this.status = newStatus;
+    public void setReviewNotes(String reviewNotes) {
+        this.reviewNotes = reviewNotes;
+    }
+
+    public LocalDateTime getCompletedAt() {
+        return completedAt;
     }
 
     public void markCompleted(String output) {
@@ -127,36 +146,26 @@ public class Task implements Comparable<Task> {
         this.completedAt = LocalDateTime.now();
     }
 
+    public void markUnderReview(String output) {
+        this.status = TaskStatus.UNDER_REVIEW;
+        this.finalOutput = output;
+    }
+
     public void markFailed(String errorMessage) {
         this.status = TaskStatus.FAILED;
         this.finalOutput = "ERROR: " + errorMessage;
         this.completedAt = LocalDateTime.now();
     }
 
-    // ================= Comparable Implementation =================
-
-    /**
-     * Defines natural ordering for PriorityQueue scheduling:
-     * 1. Higher priority levels come first (e.g. HIGH (3) comes before LOW (1)).
-     * 2. If priorities are equal, the earlier task (older createdAt) comes first (FIFO).
-     */
     @Override
     public int compareTo(Task other) {
-        if (other == null) {
-            return -1;
-        }
-
-        // Compare Priority descending: larger priority level should be dequeued first
-        int priorityComparison = Integer.compare(other.priority.getLevel(), this.priority.getLevel());
-        if (priorityComparison != 0) {
-            return priorityComparison;
-        }
-
-        // If priority is the same, older timestamp comes first (FIFO)
+        if (other == null) return -1;
+        // Priority descending
+        int p = Integer.compare(other.priority.getLevel(), this.priority.getLevel());
+        if (p != 0) return p;
+        // Timestamp ascending (FIFO)
         return this.createdAt.compareTo(other.createdAt);
     }
-
-    // ================= equals & hashCode =================
 
     @Override
     public boolean equals(Object o) {
@@ -170,16 +179,14 @@ public class Task implements Comparable<Task> {
         return Objects.hash(taskId);
     }
 
-    // ================= String Representation =================
-
     @Override
     public String toString() {
-        return String.format("[%s] Task #%s | %-15s | Priority: %-6s | Status: %-11s | Subject: %s",
+        return String.format("[%s] Task #%s | %-16s | Priority: %-6s | Status: %-12s | Project: %s",
                 createdAt.toLocalTime().withNano(0),
-                taskId.substring(0, 8),
+                taskId.substring(0, Math.min(8, taskId.length())),
                 type,
                 priority,
                 status,
-                subjectId);
+                projectId);
     }
 }
