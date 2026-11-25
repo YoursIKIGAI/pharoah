@@ -104,10 +104,12 @@ public class PharoahApplication {
         System.out.println("=========================================================================\n");
 
         try {
+            long runId = System.currentTimeMillis() % 10000;
+
             // 1. Module A: Create Project
             System.out.println("--- [1] MODULE A: PROJECT CREATION & ISOLATION ---");
             Project project = projectService.createProject("Research: AI in Cybersecurity", "Academic research project evaluating LLM agent vulnerabilities.");
-            System.out.println("  Created Project: " + project.getName() + " (ID: " + project.getProjectId().substring(0, 8) + ")");
+            System.out.println("  Active Project: " + project.getName() + " (ID: " + project.getProjectId().substring(0, Math.min(8, project.getProjectId().length())) + ")");
 
             // 2. Module E: Save Knowledge Assets
             System.out.println("\n--- [2] MODULE E: KNOWLEDGE REPOSITORY PERSISTENCE ---");
@@ -120,8 +122,9 @@ public class PharoahApplication {
 
             // 3. Module D: Orchestrator Objective Decomposition
             System.out.println("\n--- [3] MODULE D: MULTI-AGENT ORCHESTRATION & DECOMPOSITION ---");
-            System.out.println("  Decomposing objective 'AI Threat Detection' into dependent subtasks...");
-            List<Task> subtasks = orchestrator.decomposeObjective(project.getProjectId(), "AI Threat Detection", "Adversarial Machine Learning");
+            String objectiveTitle = "AI Threat Detection #" + runId;
+            System.out.println("  Decomposing objective '" + objectiveTitle + "' into dependent subtasks...");
+            List<Task> subtasks = orchestrator.decomposeObjective(project.getProjectId(), objectiveTitle, "Adversarial Machine Learning");
             System.out.printf("  Generated %d subtasks with dependency graph.\n", subtasks.size());
 
             // 4. Module B: Execute Task Concurrently via Agent Swarm
@@ -139,7 +142,7 @@ public class PharoahApplication {
 
             // 5. Module F: Document Workflow & Section Compilation
             System.out.println("\n--- [6] MODULE F: MULTI-SECTION DOCUMENT WORKFLOW & COMPILATION ---");
-            Document doc = documentService.createDocumentWithTemplate(project.getProjectId(), "AI in Cybersecurity - Final Paper", DocumentType.RESEARCH_PAPER);
+            Document doc = documentService.createDocumentWithTemplate(project.getProjectId(), "AI in Cybersecurity - Paper #" + runId, DocumentType.RESEARCH_PAPER);
             System.out.printf("  Created Document: '%s' with %d template sections.\n", doc.getTitle(), doc.getDocumentType().getStandardSections().size());
 
             List<DocumentSection> sections = documentService.getSections(doc.getDocumentId());

@@ -37,6 +37,13 @@ public class ProjectService {
         if (name == null || name.trim().isEmpty()) {
             throw new IllegalArgumentException("Project name cannot be empty.");
         }
+        // SANCHIT: Check if project already exists to ensure idempotent creation
+        Project existing = projectDao.findByName(name.trim());
+        if (existing != null) {
+            this.currentActiveProject = existing;
+            return existing;
+        }
+
         Project project = new Project(name.trim(), description != null ? description.trim() : "");
         projectDao.create(project);
         this.currentActiveProject = project;
