@@ -23,12 +23,14 @@ import com.pharoah.project.Project;
 import com.pharoah.project.ProjectService;
 import com.pharoah.tasks.TaskService;
 
+import java.io.File;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.Future;
 
 // VARIJ: Central Interactive Command-Line Interface for PHAROAH.
 // Provides user-defined agent deployment, DAG dependency configuration,
-// live concurrent execution dashboard, and MySQL persistence inspection.
+// live concurrent execution dashboard, immediate agent output inspection, and MySQL persistence inspection.
 public class PharoahCLI {
 
     private final ProjectService projectService;
@@ -127,14 +129,14 @@ public class PharoahCLI {
             displayDeploymentPlan(category, topic, agents, maxWorkers);
 
             System.out.println("  Workflow Deployment Options:");
-            System.out.println("    [1] Accept proposed plan & Launch Swarm");
+            System.out.println("    [1] Accept proposed plan & Launch Swarm (Press Enter to Start)");
             System.out.println("    [2] Customize agent priorities");
             System.out.println("    [3] Modify agent dependencies");
             System.out.println("    [4] Set maximum concurrent worker threads");
             System.out.println("    [5] Add a new specialized agent");
             System.out.println("    [6] Remove an agent");
             System.out.println("    [0] Cancel and return to main menu");
-            System.out.print("\n  Enter choice (0-6) [default 1]: ");
+            System.out.print("\n  Enter choice (0-6) [default 1 to launch swarm]: ");
             String opt = scanner.nextLine().trim();
 
             switch (opt) {
@@ -274,19 +276,146 @@ public class PharoahCLI {
             WorkflowExecutionResult result = workflowOrchestrator.executeWorkflow(plan);
 
             if (result.isSuccess()) {
-                TerminalUI.printSuccess("Workflow completed successfully!");
-                TerminalUI.printInfo("Final Document Artifact: " + result.getOutputFilePath());
-                TerminalUI.printInfo(String.format("Total Latency: %.2f seconds | Deployed Swarm: %d Agents",
-                        result.getDurationSeconds(), result.getAgentsUsed().size()));
+                TerminalUI.printSuccess("Multi-Agent Swarm execution completed successfully!");
+                TerminalUI.printInfo(String.format("Total Latency: %.2f seconds | Deployed Swarm: %d Agents | Worker Pool: %d Threads",
+                        result.getDurationSeconds(), result.getAgentsUsed().size(), maxWorkers));
+                TerminalUI.printInfo("Persisted Document Artifact: " + result.getOutputFilePath());
+
+                // Interactive Agent Output & Artifact Viewer
+                handlePostExecutionViewer(result, plan);
             } else {
                 TerminalUI.printError("Workflow encountered errors during execution.");
+                System.out.print("\n  Press Enter to return to main menu...");
+                scanner.nextLine();
             }
 
         } catch (Exception e) {
             TerminalUI.printError("Orchestration failed: " + e.getMessage());
+            System.out.print("\n  Press Enter to return to main menu...");
+            scanner.nextLine();
         }
+    }
 
-        System.out.print("\n  Press Enter to return to main menu...");
+    // =========================================================================
+    // POST-EXECUTION ARTIFACT VIEWER & AGENT OUTPUT INSPECTION
+    // =========================================================================
+
+    private void handlePostExecutionViewer(WorkflowExecutionResult result, WorkflowPlan plan) {
+        boolean viewing = true;
+        Map<String, AgentOutput> outputs = result.getAgentOutputs();
+
+        while (viewing) {
+            TerminalUI.printSectionHeader(String.format("SWARM AGENT OUTPUTS & ARTIFACTS: %s", result.getTopic().toUpperCase()));
+
+            System.out.printf("  %s %-10s │ %-28s │ %-10s │ %-8s │ %s%s\n",
+                    TerminalUI.BOLD, "AGENT ID", "AGENT NAME", "DURATION", "WORDS", "THREAD", TerminalUI.RESET);
+            TerminalUI.printDivider();
+
+            for (AgentDeployment a : plan.getAgents()) {
+                AgentOutput out = outputs.get(a.getId());
+                long dur = out != null ? out.getDurationMs() : a.getExecutionDurationMs();
+                int words = out != null ? out.getWordCount() : 0;
+                String thread = out != null ? out.getThreadName() : a.getAssignedThreadName();
+
+                System.out.printf("  %-10s │ %-28s │ %6d ms  │ %4d wds │ %s\n",
+                        a.getId(),
+                        a.getName().length() > 28 ? a.getName().substring(0, 25) + "..." : a.getName(),
+                        dur,
+                        words,
+                        thread != null ? thread : "Worker");
+            }
+            TerminalUI.printSectionFooter();
+
+            System.out.println("  Swarm Artifact Actions:");
+            System.out.println("    [1] 📄 View Full Compiled Document in Terminal (Read entire output)");
+            System.out.println("    [2] 🤖 Inspect Specific Agent Output (Literature, Methodology, Data, etc.)");
+            System.out.println("    [3] 📂 View Output File Path & Open Instructions");
+            System.out.println("    [0] 🔙 Return to Main Menu");
+            System.out.print("\n  Select an action (0-3) [default 1 to read document]: ");
+
+            String choice = scanner.nextLine().trim();
+            switch (choice) {
+                case "", "1" -> displayFullCompiledDocument(result);
+                case "2" -> inspectSpecificAgentOutput(plan, outputs);
+                case "3" -> displayOutputFileLocation(result);
+                case "0", "exit", "back" -> viewing = false;
+                default -> TerminalUI.printWarning("Invalid choice. Please enter 0-3.");
+            }
+        }
+    }
+
+    private void displayFullCompiledDocument(WorkflowExecutionResult result) {
+        TerminalUI.printBreadcrumb("Swarm Output", "Consolidated Document Artifact");
+        TerminalUI.printSectionHeader("CONSOLIDATED DOCUMENT: " + result.getTopic().toUpperCase());
+        System.out.println();
+        System.out.println(result.getFullDocument());
+        System.out.println();
+        TerminalUI.printSectionFooter();
+        System.out.print("\n  Press Enter to return to artifact actions...");
+        scanner.nextLine();
+    }
+
+    private void inspectSpecificAgentOutput(WorkflowPlan plan, Map<String, AgentOutput> outputs) {
+        TerminalUI.printBreadcrumb("Swarm Output", "Agent Inspector");
+        List<AgentDeployment> agents = plan.getAgents();
+
+        System.out.println("\n  Available Agents to Inspect:");
+        for (int i = 0; i < agents.size(); i++) {
+            AgentDeployment a = agents.get(i);
+            AgentOutput out = outputs.get(a.getId());
+            int words = out != null ? out.getWordCount() : 0;
+            System.out.printf("    [%d] %-8s : %-28s (%d words, Priority: %s)\n",
+                    i + 1, a.getId(), a.getName(), words, a.getPriority());
+        }
+        System.out.println("    [0] Back to Artifact Actions");
+        System.out.print("\n  Select agent number (1-" + agents.size() + "): ");
+
+        String in = scanner.nextLine().trim();
+        try {
+            int idx = Integer.parseInt(in) - 1;
+            if (idx >= 0 && idx < agents.size()) {
+                AgentDeployment selected = agents.get(idx);
+                AgentOutput out = outputs.get(selected.getId());
+
+                TerminalUI.printSectionHeader(String.format("OUTPUT: %s (%s)", selected.getName().toUpperCase(), selected.getId()));
+                System.out.printf("  Responsibility : %s\n", selected.getResponsibility());
+                System.out.printf("  Assigned Thread: %s | Execution Time: %d ms | Words: %d\n",
+                        out != null ? out.getThreadName() : selected.getAssignedThreadName(),
+                        out != null ? out.getDurationMs() : selected.getExecutionDurationMs(),
+                        out != null ? out.getWordCount() : 0);
+                if (out != null && !out.getCitations().isEmpty()) {
+                    System.out.println("  Citations Cited: " + String.join("; ", out.getCitations()));
+                }
+                TerminalUI.printDivider();
+                System.out.println();
+                if (out != null && !out.getContent().isBlank()) {
+                    System.out.println(out.getContent());
+                } else {
+                    System.out.println("  [!] No content was recorded for this agent.");
+                }
+                System.out.println();
+                TerminalUI.printSectionFooter();
+
+                System.out.print("\n  Press Enter to continue...");
+                scanner.nextLine();
+            }
+        } catch (NumberFormatException ignored) {}
+    }
+
+    private void displayOutputFileLocation(WorkflowExecutionResult result) {
+        TerminalUI.printBreadcrumb("Swarm Output", "File Details");
+        File file = new File(result.getOutputFilePath());
+        TerminalUI.printSectionHeader("OUTPUT FILE DETAILS");
+        System.out.printf("  Topic          : %s\n", result.getTopic());
+        System.out.printf("  Category       : %s\n", result.getCategory());
+        System.out.printf("  Relative Path  : %s\n", result.getOutputFilePath());
+        System.out.printf("  Absolute Path  : %s\n", file.getAbsolutePath());
+        System.out.printf("  File Exists    : %b\n", file.exists());
+        System.out.printf("  File Size      : %d bytes\n", file.length());
+        System.out.println("\n  To view or edit in VS Code:");
+        System.out.printf("    code \"%s\"\n", file.getAbsolutePath());
+        TerminalUI.printSectionFooter();
+        System.out.print("\n  Press Enter to return to artifact actions...");
         scanner.nextLine();
     }
 
@@ -420,7 +549,8 @@ public class PharoahCLI {
         System.out.println("  2. Create New Task");
         System.out.println("  3. Review & Approve Task (Human-in-the-Loop)");
         System.out.println("  4. Delete Task");
-        System.out.print("  Choose (1-4): ");
+        System.out.println("  5. Execute All Tasks in Current Project Swarm");
+        System.out.print("  Choose (1-5): ");
         String sub = scanner.nextLine().trim();
 
         switch (sub) {
@@ -458,6 +588,24 @@ public class PharoahCLI {
                 taskService.deleteTask(scanner.nextLine().trim());
                 TerminalUI.printSuccess("Task deleted.");
             }
+            case "5" -> {
+                List<Task> tasks = taskService.getTasksByProject(pid);
+                TerminalUI.printInfo(String.format("Executing %d tasks in project '%s' across worker pool...", tasks.size(), pid));
+                for (Task t : tasks) {
+                    if (t.getStatus() != TaskStatus.COMPLETED) {
+                        try {
+                            Future<TaskResult> future = legacyOrchestrator.submitTaskAsync(t);
+                            TaskResult res = future.get();
+                            TerminalUI.printSuccess(String.format("[%s] Done by '%s' (%d ms)", t.getTitle(), res.executedByAgent(), res.executionDurationMs()));
+                            if (t.getFinalOutput() != null && !t.getFinalOutput().isBlank()) {
+                                System.out.println("     Output: " + (t.getFinalOutput().length() > 140 ? t.getFinalOutput().substring(0, 137) + "..." : t.getFinalOutput()));
+                            }
+                        } catch (Exception e) {
+                            TerminalUI.printError("Execution error on task " + t.getTitle() + ": " + e.getMessage());
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -481,6 +629,22 @@ public class PharoahCLI {
 
         List<Task> subtasks = legacyOrchestrator.decomposeObjective(pid, title, topic);
         TerminalUI.printSuccess(String.format("Decomposed into %d subtasks with dependency graph.", subtasks.size()));
+
+        System.out.print("\n  Deploy and execute these subtasks across worker threads now? (Y/n) [default Y]: ");
+        String execChoice = scanner.nextLine().trim();
+        if (execChoice.isEmpty() || execChoice.equalsIgnoreCase("y") || execChoice.equalsIgnoreCase("yes")) {
+            TerminalUI.printInfo("Dispatching subtasks to ThreadPoolManager...");
+            for (Task t : subtasks) {
+                Future<TaskResult> future = legacyOrchestrator.submitTaskAsync(t);
+                try {
+                    TaskResult res = future.get();
+                    TerminalUI.printSuccess(String.format("[%s] Completed by '%s' (%d ms)", t.getTitle(), res.executedByAgent(), res.executionDurationMs()));
+                    System.out.println("     Output Preview: " + (t.getFinalOutput() != null && t.getFinalOutput().length() > 140 ? t.getFinalOutput().substring(0, 137) + "..." : t.getFinalOutput()));
+                } catch (Exception e) {
+                    TerminalUI.printError("Task execution failed: " + e.getMessage());
+                }
+            }
+        }
     }
 
     private void handleKnowledgeMenu() throws SQLException {

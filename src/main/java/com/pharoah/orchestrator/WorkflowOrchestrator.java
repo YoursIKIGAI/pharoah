@@ -191,7 +191,9 @@ public class WorkflowOrchestrator {
                 artifactFile.getPath(),
                 totalDurationSec,
                 deployedAgentNames,
-                sectionTitles
+                sectionTitles,
+                context.getOutputs(),
+                fullDocument
         );
     }
 }
