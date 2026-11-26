@@ -71,7 +71,7 @@
 Launch the full interactive command-line workspace:
 ```powershell
 cd "c:\Users\varij chauhan\OneDrive\Desktop\pharoah"
-javac -cp "lib/*" -d target/classes (Get-ChildItem -Path src/main/java -Filter *.java -Recurse | Select-Object -ExpandProperty FullName)
+javac --release 21 -cp "lib/*" -d target/classes (Get-ChildItem -Path src/main/java -Filter *.java -Recurse | Select-Object -ExpandProperty FullName)
 java -cp "target/classes;lib/*" com.pharoah.app.PharoahApplication
 ```
 
@@ -117,3 +117,4 @@ Environment variables take precedence over configuration files for secure deploy
 * `UI_ANSI` (default: `true`)
 
 If MySQL is unavailable, PHAROAH automatically activates an in-process SQLite fallback (`pharoah.db`) to ensure zero-crash robustness. Sensitive passwords are never hardcoded in Java source files.
+

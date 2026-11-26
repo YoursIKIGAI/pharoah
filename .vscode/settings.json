@@ -1,7 +1,8 @@
 {
+    "java.compile.target": 21,
+    "java.compile.source": 21,
     "java.project.sourcePaths": [
-        "src/main/java",
-        "src/test/java"
+        "src/main/java"
     ],
     "java.project.outputPath": "target/classes",
     "java.project.referencedLibraries": [

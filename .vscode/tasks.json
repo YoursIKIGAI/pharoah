@@ -31,7 +31,7 @@
         {
             "label": "🔨 Compile All Java Files",
             "type": "shell",
-            "command": "javac -cp \"lib/*\" -d target/classes (Get-ChildItem -Path src/main/java, src/test/java -Filter *.java -Recurse | Select-Object -ExpandProperty FullName)",
+            "command": "javac --release 21 -cp \"lib/*\" -d target/classes (Get-ChildItem -Path src/main/java -Filter *.java -Recurse | Select-Object -ExpandProperty FullName)",
             "problemMatcher": ["$javac"],
             "presentation": {
                 "reveal": "silent"
