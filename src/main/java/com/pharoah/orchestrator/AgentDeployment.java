@@ -7,13 +7,15 @@ import java.util.Collections;
 import java.util.List;
 
 // VARIJ: User-defined agent configuration and deployment blueprint.
-// Specifies responsibilities, priority, prerequisites, execution state, and thread binding.
+// Specifies responsibilities, agent kind, sub-topics, priority, execution state, and thread binding.
 public class AgentDeployment {
 
     private final String id;
     private String name;
     private String role;
     private String responsibility;
+    private AgentKind kind;
+    private List<String> subTopics;
     private Priority priority;
     private final List<String> dependencies;
 
@@ -22,11 +24,13 @@ public class AgentDeployment {
     private volatile long executionDurationMs;
     private volatile String outputSnippet;
 
-    public AgentDeployment(String id, String name, String role, String responsibility, Priority priority, List<String> dependencies) {
+    public AgentDeployment(String id, String name, AgentKind kind, String responsibility, Priority priority, List<String> dependencies) {
         this.id = id;
         this.name = name;
-        this.role = role;
+        this.kind = (kind != null) ? kind : AgentKind.RESEARCH_PAPER;
+        this.role = this.kind.name();
         this.responsibility = responsibility;
+        this.subTopics = this.kind.generateSubTopics(responsibility);
         this.priority = (priority != null) ? priority : Priority.MEDIUM;
         this.dependencies = new ArrayList<>(dependencies != null ? dependencies : Collections.emptyList());
         this.status = this.dependencies.isEmpty() ? AgentStatus.READY : AgentStatus.WAITING;
@@ -35,8 +39,27 @@ public class AgentDeployment {
         this.outputSnippet = "";
     }
 
+    public AgentDeployment(String id, String name, AgentKind kind, String responsibility, Priority priority) {
+        this(id, name, kind, responsibility, priority, Collections.emptyList());
+    }
+
+    // Backwards-compatible constructor
+    public AgentDeployment(String id, String name, String role, String responsibility, Priority priority, List<String> dependencies) {
+        this(id, name, parseKind(role), responsibility, priority, dependencies);
+    }
+
     public AgentDeployment(String id, String name, String role, String responsibility, Priority priority) {
-        this(id, name, role, responsibility, priority, Collections.emptyList());
+        this(id, name, parseKind(role), responsibility, priority, Collections.emptyList());
+    }
+
+    private static AgentKind parseKind(String role) {
+        if (role == null) return AgentKind.RESEARCH_PAPER;
+        String r = role.toUpperCase();
+        if (r.contains("DATA") || r.contains("ENQUIRY") || r.contains("METRIC")) return AgentKind.DATA_ENQUIRY;
+        if (r.contains("CREATIVE") || r.contains("PLOT") || r.contains("CHARACTER") || r.contains("SCENE")) return AgentKind.CREATIVE;
+        if (r.contains("ARCHITECT") || r.contains("SOFTWARE") || r.contains("API") || r.contains("TECH")) return AgentKind.TECHNICAL_ARCHITECTURE;
+        if (r.contains("STRATEGIC") || r.contains("BUSINESS") || r.contains("MARKET") || r.contains("RISK")) return AgentKind.STRATEGIC_ANALYSIS;
+        return AgentKind.RESEARCH_PAPER;
     }
 
     public boolean isIndependent() {
@@ -55,6 +78,18 @@ public class AgentDeployment {
         this.name = name;
     }
 
+    public AgentKind getKind() {
+        return kind;
+    }
+
+    public void setKind(AgentKind kind) {
+        this.kind = kind;
+        this.role = (kind != null) ? kind.name() : "SPECIALIST";
+        if (this.responsibility != null && (this.subTopics == null || this.subTopics.isEmpty())) {
+            this.subTopics = kind.generateSubTopics(this.responsibility);
+        }
+    }
+
     public String getRole() {
         return role;
     }
@@ -69,6 +104,24 @@ public class AgentDeployment {
 
     public void setResponsibility(String responsibility) {
         this.responsibility = responsibility;
+        if (this.kind != null) {
+            this.subTopics = this.kind.generateSubTopics(responsibility);
+        }
+    }
+
+    public List<String> getSubTopics() {
+        if (subTopics == null || subTopics.isEmpty()) {
+            if (kind != null && responsibility != null) {
+                subTopics = kind.generateSubTopics(responsibility);
+            } else {
+                subTopics = new ArrayList<>();
+            }
+        }
+        return Collections.unmodifiableList(subTopics);
+    }
+
+    public void setSubTopics(List<String> subTopics) {
+        this.subTopics = new ArrayList<>(subTopics != null ? subTopics : Collections.emptyList());
     }
 
     public Priority getPriority() {
@@ -92,13 +145,6 @@ public class AgentDeployment {
         }
     }
 
-    public void removeDependency(String prerequisiteId) {
-        dependencies.remove(prerequisiteId);
-        if (dependencies.isEmpty() && status == AgentStatus.WAITING) {
-            status = AgentStatus.READY;
-        }
-    }
-
     public void clearDependencies() {
         dependencies.clear();
         if (status == AgentStatus.WAITING) {
@@ -110,7 +156,7 @@ public class AgentDeployment {
         return status;
     }
 
-    public synchronized void setStatus(AgentStatus status) {
+    public void setStatus(AgentStatus status) {
         this.status = status;
     }
 
@@ -136,11 +182,5 @@ public class AgentDeployment {
 
     public void setOutputSnippet(String outputSnippet) {
         this.outputSnippet = outputSnippet;
-    }
-
-    @Override
-    public String toString() {
-        return String.format("[%s] %s (%s) - Priority: %s, Prereqs: %s",
-                id, name, responsibility, priority, dependencies.isEmpty() ? "None (Independent)" : dependencies);
     }
 }

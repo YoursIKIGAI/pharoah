@@ -1,12 +1,10 @@
 package com.pharoah.orchestrator;
 
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.Callable;
 
 // VARIJ: Concurrent task unit executed by worker threads in the ExecutorService.
-// Synthesizes in-depth, multi-paragraph academic prose for the assigned topic
+// Synthesizes dynamic, multi-paragraph academic prose for the assigned topic and sub-topics
 // and publishes thread-safe outputs to the WorkflowContext.
 public class SpecializedAgentTask implements Callable<AgentOutput> {
 
@@ -37,8 +35,8 @@ public class SpecializedAgentTask implements Callable<AgentOutput> {
                 Thread.sleep(simulatedWorkDurationMs);
             }
 
-            // Synthesize substantive, in-depth academic prose
-            String synthesizedProse = AgentContentSynthesizer.synthesize(deployment.getName(), topic, upstreamData);
+            // Synthesize dynamic, in-depth academic prose tailored to kind & sub-topics
+            String synthesizedProse = AgentContentSynthesizer.synthesize(deployment, upstreamData);
 
             long duration = System.currentTimeMillis() - startTime;
             AgentOutput output = new AgentOutput(
