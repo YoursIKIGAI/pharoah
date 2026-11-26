@@ -4,8 +4,6 @@ import com.pharoah.agent.AgentService;
 import com.pharoah.ai.AIService;
 import com.pharoah.ai.RemoteHttpAIService;
 import com.pharoah.analytics.TaskAnalyticsEngine;
-import com.pharoah.bridge.PythonAgentBridge;
-import com.pharoah.bridge.PythonExecutionResult;
 import com.pharoah.cli.PharoahCLI;
 import com.pharoah.cli.TerminalUI;
 import com.pharoah.concurrency.ThreadPoolManager;
@@ -18,7 +16,7 @@ import com.pharoah.document.DocumentWorkflowService;
 import com.pharoah.knowledge.KnowledgeResource;
 import com.pharoah.knowledge.KnowledgeService;
 import com.pharoah.knowledge.ResourceType;
-import com.pharoah.orchestrator.TaskOrchestrator;
+import com.pharoah.orchestrator.*;
 import com.pharoah.persistence.DatabaseConnectionFactory;
 import com.pharoah.persistence.dao.*;
 import com.pharoah.project.Project;
@@ -29,7 +27,7 @@ import com.pharoah.tasks.TaskService;
 import java.util.List;
 
 // VARIJ, ASHUTOSH, SANCHIT: Main Application Entrypoint.
-// Hybrid Architecture: Java Terminal Orchestrator & CLI + Python Multi-Agent Swarm + MySQL 8.0 Persistence.
+// Technical Architecture: Java-Native Multi-Agent Orchestrator + FixedThreadPool Concurrency + MySQL 8.0 Persistence.
 public class PharoahApplication {
 
     private final DatabaseConnectionFactory dbFactory;
@@ -38,11 +36,11 @@ public class PharoahApplication {
     private final AgentService agentService;
     private final KnowledgeService knowledgeService;
     private final DocumentWorkflowService documentService;
-    private final TaskOrchestrator orchestrator;
+    private final com.pharoah.orchestrator.TaskOrchestrator legacyOrchestrator;
     private final TaskAnalyticsEngine analyticsEngine;
     private final ThreadPoolManager poolManager;
     private final UserActivityDAO userActivityDAO;
-    private final PythonAgentBridge pythonBridge;
+    private final WorkflowOrchestrator workflowOrchestrator;
     private final PharoahCLI cli;
 
     public PharoahApplication() {
@@ -69,22 +67,21 @@ public class PharoahApplication {
         TaskManager taskManager = new TaskManager();
 
         AIService aiEngine = new RemoteHttpAIService();
-        this.orchestrator = new TaskOrchestrator(taskManager, poolManager, taskDao, agentService, aiEngine);
+        this.legacyOrchestrator = new com.pharoah.orchestrator.TaskOrchestrator(taskManager, poolManager, taskDao, agentService, aiEngine);
 
-        // VARIJ & ASHUTOSH: Initialize Python Multi-Agent Swarm Bridge
-        this.pythonBridge = new PythonAgentBridge();
+        // VARIJ: Central Multi-Agent Orchestration Engine
+        this.workflowOrchestrator = new WorkflowOrchestrator(userActivityDAO);
 
         // Terminal CLI
         this.cli = new PharoahCLI(
                 projectService,
                 taskService,
                 agentService,
-                orchestrator,
+                legacyOrchestrator,
                 knowledgeService,
                 documentService,
                 analyticsEngine,
-                userActivityDAO,
-                pythonBridge
+                userActivityDAO
         );
     }
 
@@ -110,52 +107,37 @@ public class PharoahApplication {
         System.out.printf("  Database URL    : %s\n", cfg.getDbUrl());
         System.out.printf("  Database User   : %s\n", cfg.getDbUser());
         System.out.printf("  Database Auth   : %s\n", cfg.getMaskedPassword());
-        System.out.printf("  Worker Pool     : %d Threads\n", poolManager.getPoolSize());
+        System.out.printf("  Worker Pool     : %d Available CPU Processors\n", poolManager.getPoolSize());
         System.out.printf("  Active Project  : %s\n", projectService.getActiveProject() != null ? projectService.getActiveProject().getName() : "None");
         TerminalUI.printSectionFooter();
     }
 
-    // VARIJ, ASHUTOSH, SANCHIT: Automated end-to-end demo validating format-driven multi-agent execution & persistence
+    // VARIJ, ASHUTOSH, SANCHIT: Automated end-to-end demo validating genuine concurrent multi-agent orchestration
     public void runAutomatedDemo() {
         TerminalUI.printBanner("2.0-LTS", dbFactory.getDbType(), dbFactory.isMySqlActive());
-        TerminalUI.printSectionHeader("AUTOMATED MULTI-AGENT SWARM & PERSISTENCE DEMO");
+        TerminalUI.printSectionHeader("JAVA CONCURRENT MULTI-AGENT ORCHESTRATION DEMO");
 
         try {
-            // STEP 1-5 DEMO: Execute Format-Driven Multi-Agent Swarm for "Research Paper"
-            TerminalUI.printBreadcrumb("Demo", "Multi-Agent Swarm", "Research Paper");
+            // STEP 1-5 DEMO: Execute Java-Native Multi-Agent Swarm for "Research Paper"
+            TerminalUI.printBreadcrumb("Demo", "Multi-Agent Swarm", "Research Paper (IEEE/ACM)");
             String topic = "Impact of Artificial Intelligence on Cybersecurity";
-            System.out.println("  Topic           : " + topic);
-            System.out.println("  Workflow Format : Research Paper (Format #1)");
-            System.out.println("  Selected Sections: Literature Review, Research Gap, Methodology, Data Analysis");
-            System.out.println("  Priorities      : Literature Review:HIGH, Research Gap:HIGH, Methodology:MEDIUM, Data Analysis:LOW");
-            TerminalUI.printInfo("Dispatching swarm via Python Subprocess Bridge...\n");
+            System.out.println("  Inquiry Topic   : " + topic);
+            System.out.println("  Category        : Research Paper (6 Agents, DAG Dependencies, Priorities)");
+            System.out.println("  Execution Model : Java FixedThreadPool (4 Concurrent Workers) with Synchronized Locks\n");
 
-            PythonExecutionResult swarmResult = pythonBridge.runWorkflow(
-                    "1",
-                    topic,
-                    "Literature Review,Research Gap,Methodology,Data Analysis",
-                    "Literature Review:HIGH,Research Gap:HIGH,Methodology:MEDIUM,Data Analysis:LOW",
-                    "Literature Review:Research Specialist,Research Gap:Analysis Specialist,Methodology:Research Specialist,Data Analysis:Data & Metrics Analyst"
-            );
+            List<AgentDeployment> agents = WorkflowCategory.RESEARCH_PAPER.createProposedDeployment(topic);
+            WorkflowPlan plan = new WorkflowPlan(WorkflowCategory.RESEARCH_PAPER, topic, agents, 4);
+
+            WorkflowExecutionResult result = workflowOrchestrator.executeWorkflow(plan);
 
             System.out.println();
-            TerminalUI.printSuccess(String.format("Swarm Status: %s in %.2fs", swarmResult.getStatus(), swarmResult.getElapsedSeconds()));
-            TerminalUI.printInfo("Compiled Artifact: " + swarmResult.getOutputFile());
+            TerminalUI.printSuccess(String.format("Multi-Agent Swarm completed in %.2fs!", result.getDurationSeconds()));
+            TerminalUI.printInfo("Saved Artifact: " + result.getOutputFilePath());
 
-            // PERSISTENCE: Save to MySQL user_activity table
-            TerminalUI.printBreadcrumb("Demo", "MySQL Persistence");
-            UserActivity demoActivity = new UserActivity(
-                    "University Student",
-                    topic,
-                    "Research Paper",
-                    "Literature Review, Research Gap, Methodology, Data Analysis",
-                    "Research Specialist, Analysis Specialist, Data & Metrics Analyst, Quality Reviewer"
-            );
-            userActivityDAO.recordActivity(demoActivity);
-            TerminalUI.printSuccess("Activity logged to MySQL table 'user_activity'!");
-
+            // PERSISTENCE VERIFICATION
+            TerminalUI.printBreadcrumb("Demo", "MySQL Persistence Verification");
             List<UserActivity> activities = userActivityDAO.getAllActivities();
-            System.out.printf("  Total Records in Database: %d\n", activities.size());
+            System.out.printf("  Total Records in MySQL: %d\n", activities.size());
             if (!activities.isEmpty()) {
                 System.out.println("  Latest Audit Row: " + activities.get(0));
             }
@@ -181,7 +163,7 @@ public class PharoahApplication {
             }
 
             TerminalUI.printSectionHeader("DEMO VERIFICATION COMPLETE");
-            TerminalUI.printSuccess("All format-driven workflows, multi-agent swarms, and MySQL persistence verified!");
+            TerminalUI.printSuccess("Genuine Java multithreaded multi-agent orchestration & MySQL persistence verified!");
             TerminalUI.printSectionFooter();
 
         } catch (Exception e) {

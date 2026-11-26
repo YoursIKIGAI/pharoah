@@ -1,0 +1,31 @@
+# =============================================================================
+# 👑 PHAROAH - Centralized Configuration Template
+# =============================================================================
+# Copy this file to 'config.properties' and fill in your local credentials.
+# Environment variables will automatically override any settings in this file.
+# =============================================================================
+
+# --- Database Connection (MySQL 8.0) ---
+db.type=mysql
+db.driver=com.mysql.cj.jdbc.Driver
+db.url=jdbc:mysql://localhost:3306/pharoah_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true
+db.user=root
+db.password=YOUR_MYSQL_PASSWORD_HERE
+
+# --- Database Fallback (SQLite used if MySQL server is offline) ---
+db.fallback.sqlite=jdbc:sqlite:pharoah.db
+
+# --- Java Multithreading & Swarm Concurrency ---
+concurrency.max_threads=4
+concurrency.agent_work_time_ms=600
+
+# --- Python Agent Swarm Runtime (Optional) ---
+python.command=python
+
+# --- Terminal UI Options ---
+ui.ansi.colors=true
+
+# --- Pluggable AI Engine ---
+# Options: MOCK_HEURISTIC, GEMINI_API, OLLAMA
+ai.provider=MOCK_HEURISTIC
+ai.endpoint=http://localhost:11434/api/generate

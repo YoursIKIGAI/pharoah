@@ -4,8 +4,6 @@ import com.pharoah.agent.AgentConfig;
 import com.pharoah.agent.AgentRole;
 import com.pharoah.agent.AgentService;
 import com.pharoah.analytics.TaskAnalyticsEngine;
-import com.pharoah.bridge.PythonAgentBridge;
-import com.pharoah.bridge.PythonExecutionResult;
 import com.pharoah.core.enums.Priority;
 import com.pharoah.core.enums.TaskStatus;
 import com.pharoah.core.enums.TaskType;
@@ -19,7 +17,7 @@ import com.pharoah.document.DocumentWorkflowService;
 import com.pharoah.knowledge.KnowledgeResource;
 import com.pharoah.knowledge.KnowledgeService;
 import com.pharoah.knowledge.ResourceType;
-import com.pharoah.orchestrator.TaskOrchestrator;
+import com.pharoah.orchestrator.*;
 import com.pharoah.persistence.dao.UserActivityDAO;
 import com.pharoah.project.Project;
 import com.pharoah.project.ProjectService;
@@ -27,74 +25,58 @@ import com.pharoah.tasks.TaskService;
 
 import java.sql.SQLException;
 import java.util.*;
-import java.util.concurrent.Future;
 
-// VARIJ & SANCHIT: Refined Terminal Controller.
-// Delivers a clean, polished command-line experience with breadcrumb navigation,
-// consistent status indicators, format-driven workflows, and zero raw technical dumps.
+// VARIJ: Central Interactive Command-Line Interface for PHAROAH.
+// Provides user-defined agent deployment, DAG dependency configuration,
+// live concurrent execution dashboard, and MySQL persistence inspection.
 public class PharoahCLI {
 
     private final ProjectService projectService;
     private final TaskService taskService;
     private final AgentService agentService;
-    private final TaskOrchestrator orchestrator;
+    private final com.pharoah.orchestrator.TaskOrchestrator legacyOrchestrator;
     private final KnowledgeService knowledgeService;
     private final DocumentWorkflowService documentService;
     private final TaskAnalyticsEngine analyticsEngine;
     private final UserActivityDAO userActivityDAO;
-    private final PythonAgentBridge pythonBridge;
+    private final WorkflowOrchestrator workflowOrchestrator;
     private final Scanner scanner;
 
     public PharoahCLI(ProjectService projectService,
                       TaskService taskService,
                       AgentService agentService,
-                      TaskOrchestrator orchestrator,
+                      com.pharoah.orchestrator.TaskOrchestrator legacyOrchestrator,
                       KnowledgeService knowledgeService,
                       DocumentWorkflowService documentService,
                       TaskAnalyticsEngine analyticsEngine,
-                      UserActivityDAO userActivityDAO,
-                      PythonAgentBridge pythonBridge) {
+                      UserActivityDAO userActivityDAO) {
         this.projectService = projectService;
         this.taskService = taskService;
         this.agentService = agentService;
-        this.orchestrator = orchestrator;
+        this.legacyOrchestrator = legacyOrchestrator;
         this.knowledgeService = knowledgeService;
         this.documentService = documentService;
         this.analyticsEngine = analyticsEngine;
         this.userActivityDAO = userActivityDAO;
-        this.pythonBridge = (pythonBridge != null) ? pythonBridge : new PythonAgentBridge();
+        this.workflowOrchestrator = new WorkflowOrchestrator(userActivityDAO);
         this.scanner = new Scanner(System.in);
     }
 
-    public PharoahCLI(ProjectService projectService,
-                      TaskService taskService,
-                      AgentService agentService,
-                      TaskOrchestrator orchestrator,
-                      KnowledgeService knowledgeService,
-                      DocumentWorkflowService documentService,
-                      TaskAnalyticsEngine analyticsEngine) {
-        this(projectService, taskService, agentService, orchestrator, knowledgeService, documentService, analyticsEngine, null, new PythonAgentBridge());
-    }
-
-    // VARIJ: Main interactive terminal shell
     public void startShell() {
         boolean running = true;
         while (running) {
             TerminalUI.printBanner("2.0-LTS", "MySQL 8.0", userActivityDAO != null);
 
-            TerminalUI.printSectionHeader("SELECT WORKFLOW OR ACTION");
+            TerminalUI.printSectionHeader("SELECT WORKFLOW CATEGORY");
             TerminalUI.printMenuOption("1", "Research Paper", "Academic format with literature review & gap analysis");
-            TerminalUI.printMenuOption("2", "Research Analysis", "Deep analytical inquiry and empirical evaluation");
-            TerminalUI.printMenuOption("3", "Report Generation", "Executive summaries and actionable recommendations");
-            TerminalUI.printMenuOption("4", "Blog Writing", "High-impact prose with practical code examples");
-            TerminalUI.printMenuOption("5", "Technical Docs", "Architecture, API references, and setup guides");
-            TerminalUI.printMenuOption("6", "Business Proposal", "Market problem, ROI forecast, and execution plan");
-            TerminalUI.printMenuOption("7", "Data Analysis", "Statistical metrics and benchmark distributions");
-            TerminalUI.printMenuOption("8", "Custom Workflow", "Define custom sections and dynamic agent swarm");
+            TerminalUI.printMenuOption("2", "Creative Writing", "World-building, character concept, plot, and dialogue");
+            TerminalUI.printMenuOption("3", "Technical Documentation", "Architecture, code patterns, and API reference");
+            TerminalUI.printMenuOption("4", "Business Report", "Market analysis, financial ROI, and risk governance");
+            TerminalUI.printMenuOption("5", "Custom Workflow", "User-defined agents, custom priorities & dependencies");
             TerminalUI.printDivider();
             TerminalUI.printMenuOption("9", "Audit Log (MySQL)", "View persistent activity history from MySQL database");
-            TerminalUI.printMenuOption("10", "Advanced Tools", "Projects, task graphs, knowledge repository");
-            TerminalUI.printMenuOption("0", "Exit PHAROAH", "Clean shutdown and resource release");
+            TerminalUI.printMenuOption("10", "Advanced Tools", "Project workspaces, task graphs, knowledge repository");
+            TerminalUI.printMenuOption("0", "Exit PHAROAH", "Clean shutdown and thread pool release");
             TerminalUI.printSectionFooter();
 
             System.out.print("  Select an option (0-10): ");
@@ -102,179 +84,206 @@ public class PharoahCLI {
 
             try {
                 switch (choice) {
-                    case "1", "2", "3", "4", "5", "6", "7", "8" -> handleFormatDrivenWorkflow(choice);
+                    case "1" -> handleWorkflowCategory(WorkflowCategory.RESEARCH_PAPER);
+                    case "2" -> handleWorkflowCategory(WorkflowCategory.CREATIVE_WRITING);
+                    case "3" -> handleWorkflowCategory(WorkflowCategory.TECHNICAL_DOCUMENTATION);
+                    case "4" -> handleWorkflowCategory(WorkflowCategory.BUSINESS_REPORT);
+                    case "5" -> handleWorkflowCategory(WorkflowCategory.CUSTOM_WORKFLOW);
                     case "9" -> handleViewActivityLog();
                     case "10" -> handleAdvancedMenu();
                     case "0", "exit", "quit" -> {
                         TerminalUI.printSuccess("Shutting down cleanly. All persistent data preserved in MySQL.");
                         running = false;
                     }
-                    default -> TerminalUI.printWarning("Invalid choice. Please select an option between 0 and 10.");
+                    default -> TerminalUI.printWarning("Invalid option. Please choose between 0 and 10.");
                 }
             } catch (Exception e) {
-                TerminalUI.printError("An error occurred: " + e.getMessage());
+                TerminalUI.printError("Execution error: " + e.getMessage());
             }
         }
     }
 
     // =========================================================================
-    // 5-STEP FORMAT-DRIVEN MULTI-AGENT WORKFLOW
+    // USER-DEFINED AGENT DEPLOYMENT & CONCURRENT ORCHESTRATION
     // =========================================================================
 
-    private void handleFormatDrivenWorkflow(String choice) {
-        String workflowName = switch (choice) {
-            case "2" -> "Research Analysis";
-            case "3" -> "Report Generation";
-            case "4" -> "Blog Writing";
-            case "5" -> "Technical Documentation";
-            case "6" -> "Business Proposal";
-            case "7" -> "Data Analysis";
-            case "8" -> "Custom Workflow";
-            default -> "Research Paper";
-        };
-
-        // STEP 1 & 2: TOPIC SCOPING
-        TerminalUI.printBreadcrumb(workflowName, "Topic Scoping");
-        System.out.println("  Enter your target topic or research inquiry:");
+    private void handleWorkflowCategory(WorkflowCategory category) {
+        TerminalUI.printBreadcrumb(category.getDisplayName(), "Topic Scoping");
+        System.out.println("  Enter your target inquiry, topic, or objective:");
         System.out.print("  > ");
         String topic = scanner.nextLine().trim();
         if (topic.isEmpty()) {
             topic = "Impact of Artificial Intelligence on Cybersecurity";
-            TerminalUI.printInfo("Default topic selected: " + topic);
+            TerminalUI.printInfo("Using default topic: " + topic);
         }
 
-        // STEP 3: DOCUMENT STRUCTURE & SECTION SELECTION
-        TerminalUI.printBreadcrumb(workflowName, "Section Selection");
-        List<String> availableSections = getStandardSectionsForWorkflow(choice);
+        // 1. Propose category-specific deployment plan
+        List<AgentDeployment> agents = category.createProposedDeployment(topic);
+        int maxWorkers = 4;
 
-        if ("8".equals(choice)) {
-            System.out.println("  Enter custom section names separated by commas (e.g. Scope, Design, Tests):");
-            System.out.print("  > ");
-            String customIn = scanner.nextLine().trim();
-            if (!customIn.isEmpty()) {
-                availableSections = Arrays.stream(customIn.split(","))
-                        .map(String::trim)
-                        .filter(s -> !s.isEmpty())
-                        .toList();
+        boolean configuring = true;
+        while (configuring) {
+            TerminalUI.printBreadcrumb(category.getDisplayName(), "Deployment Configuration");
+            displayDeploymentPlan(category, topic, agents, maxWorkers);
+
+            System.out.println("  Workflow Deployment Options:");
+            System.out.println("    [1] Accept proposed plan & Launch Swarm");
+            System.out.println("    [2] Customize agent priorities");
+            System.out.println("    [3] Modify agent dependencies");
+            System.out.println("    [4] Set maximum concurrent worker threads");
+            System.out.println("    [5] Add a new specialized agent");
+            System.out.println("    [6] Remove an agent");
+            System.out.println("    [0] Cancel and return to main menu");
+            System.out.print("\n  Enter choice (0-6) [default 1]: ");
+            String opt = scanner.nextLine().trim();
+
+            switch (opt) {
+                case "", "1" -> {
+                    configuring = false;
+                    launchWorkflow(category, topic, agents, maxWorkers);
+                }
+                case "2" -> customizePriorities(agents);
+                case "3" -> modifyDependencies(agents);
+                case "4" -> maxWorkers = configureWorkerThreads(maxWorkers);
+                case "5" -> addNewAgent(agents);
+                case "6" -> removeAgent(agents);
+                case "0" -> {
+                    TerminalUI.printWarning("Workflow cancelled.");
+                    return;
+                }
+                default -> TerminalUI.printWarning("Invalid choice.");
             }
         }
+    }
 
-        TerminalUI.printSectionHeader(workflowName.toUpperCase() + " SECTIONS");
-        for (int i = 0; i < availableSections.size(); i++) {
-            String sec = availableSections.get(i);
-            String recAgent = getRecommendedAgentForSection(sec);
-            String defPrio = getDefaultPriorityForSection(sec);
-            System.out.printf("  %2d. %-24s │ Agent: %-22s │ Prio: %s\n", i + 1, sec, recAgent, defPrio);
+    private void displayDeploymentPlan(WorkflowCategory category, String topic, List<AgentDeployment> agents, int maxWorkers) {
+        TerminalUI.printSectionHeader(String.format("%s DEPLOYMENT PLAN (%d AGENTS, %d WORKER THREADS)",
+                category.getDisplayName().toUpperCase(), agents.size(), maxWorkers));
+
+        System.out.printf("  %s %-8s │ %-26s │ %-8s │ %s%s\n",
+                TerminalUI.BOLD, "ID", "Agent Responsibility", "Priority", "Dependencies", TerminalUI.RESET);
+        TerminalUI.printDivider();
+
+        for (AgentDeployment a : agents) {
+            String depStr = a.isIndependent() ? TerminalUI.GREEN + "Independent" + TerminalUI.RESET : TerminalUI.YELLOW + String.join(", ", a.getDependencies()) + TerminalUI.RESET;
+            System.out.printf("  %-8s │ %-26s │ %-8s │ %s\n",
+                    a.getId(),
+                    a.getResponsibility().length() > 26 ? a.getResponsibility().substring(0, 23) + "..." : a.getResponsibility(),
+                    a.getPriority(),
+                    depStr);
         }
         TerminalUI.printSectionFooter();
+    }
 
-        System.out.println("  Choose sections to execute:");
-        System.out.println("    [A] Complete Document (All sections)");
-        System.out.println("    Or enter comma-separated numbers (e.g. 3, 4, 5, 6):");
-        System.out.print("  > ");
-        String secInput = scanner.nextLine().trim();
-
-        List<String> selectedSections = new ArrayList<>();
-        if (secInput.equalsIgnoreCase("A") || secInput.isEmpty()) {
-            selectedSections.addAll(availableSections);
-        } else {
-            for (String tok : secInput.split(",")) {
-                try {
-                    int idx = Integer.parseInt(tok.trim()) - 1;
-                    if (idx >= 0 && idx < availableSections.size()) {
-                        selectedSections.add(availableSections.get(idx));
-                    }
-                } catch (NumberFormatException ignored) {}
-            }
-            if (selectedSections.isEmpty()) {
-                selectedSections.addAll(availableSections);
-            }
+    private void customizePriorities(List<AgentDeployment> agents) {
+        TerminalUI.printBreadcrumb("Configure Priorities");
+        for (AgentDeployment a : agents) {
+            System.out.printf("  Priority for '%s' ([H]igh, [M]edium, [L]ow) [current: %s]: ", a.getName(), a.getPriority());
+            String in = scanner.nextLine().trim().toUpperCase();
+            if (in.startsWith("H")) a.setPriority(Priority.HIGH);
+            else if (in.startsWith("L")) a.setPriority(Priority.LOW);
+            else if (in.startsWith("M")) a.setPriority(Priority.MEDIUM);
         }
+        TerminalUI.printSuccess("Priorities updated.");
+    }
 
-        // STEP 4: PRIORITY CONFIGURATION
-        TerminalUI.printBreadcrumb(workflowName, "Priority Scheduling");
-        Map<String, String> priorities = new LinkedHashMap<>();
-        for (String s : selectedSections) {
-            priorities.put(s, getDefaultPriorityForSection(s));
-        }
-
-        TerminalUI.printSectionHeader("SECTION EXECUTION SEQUENCE & PRIORITIES");
-        for (String s : selectedSections) {
-            System.out.printf("   • %-26s : [%s]\n", s, priorities.get(s));
-        }
-        TerminalUI.printSectionFooter();
-
-        System.out.print("  Customize priorities? (y/N) [default N]: ");
-        if (scanner.nextLine().trim().equalsIgnoreCase("y")) {
-            for (String s : selectedSections) {
-                System.out.printf("    Priority for '%s' ([H]igh, [M]edium, [L]ow) [current %s]: ", s, priorities.get(s));
-                String pIn = scanner.nextLine().trim().toUpperCase();
-                if (pIn.startsWith("H")) priorities.put(s, "HIGH");
-                else if (pIn.startsWith("L")) priorities.put(s, "LOW");
-                else if (pIn.startsWith("M")) priorities.put(s, "MEDIUM");
+    private void modifyDependencies(List<AgentDeployment> agents) {
+        TerminalUI.printBreadcrumb("Configure Dependencies");
+        System.out.print("  Enter Agent ID to edit dependencies (e.g. agent-03): ");
+        String id = scanner.nextLine().trim();
+        AgentDeployment target = null;
+        for (AgentDeployment a : agents) {
+            if (a.getId().equalsIgnoreCase(id)) {
+                target = a;
+                break;
             }
         }
-
-        // STEP 5: AGENT ALLOCATION
-        TerminalUI.printBreadcrumb(workflowName, "Agent Swarm Allocation");
-        Map<String, String> agentAssignments = new LinkedHashMap<>();
-        for (String s : selectedSections) {
-            agentAssignments.put(s, getRecommendedAgentForSection(s));
-        }
-
-        TerminalUI.printSectionHeader("RECOMMENDED AGENT ALLOCATIONS");
-        for (String s : selectedSections) {
-            System.out.printf("   • %-26s ➔ %s\n", s, agentAssignments.get(s));
-        }
-        System.out.printf("   • %-26s ➔ %s\n", "Quality & Verification Gate", "Quality Reviewer");
-        TerminalUI.printSectionFooter();
-
-        System.out.print("  Start multi-agent swarm execution? (Y/n): ");
-        String confirm = scanner.nextLine().trim();
-        if (confirm.equalsIgnoreCase("n")) {
-            TerminalUI.printWarning("Workflow cancelled.");
+        if (target == null) {
+            TerminalUI.printWarning("Agent not found.");
             return;
         }
 
-        // LIVE EXECUTION STREAMING
-        TerminalUI.printBreadcrumb(workflowName, "Live Swarm Execution");
-        TerminalUI.printInfo("Launching autonomous multi-agent swarm...");
-        System.out.println();
+        System.out.printf("  Current dependencies for %s: %s\n", target.getId(), target.getDependencies());
+        System.out.println("  Enter new comma-separated dependency IDs (or 'NONE' for independent):");
+        System.out.print("  > ");
+        String depIn = scanner.nextLine().trim();
 
-        String sectionsParam = String.join(",", selectedSections);
-        StringBuilder prioParam = new StringBuilder();
-        priorities.forEach((k, v) -> prioParam.append(k).append(":").append(v).append(","));
-        StringBuilder agentParam = new StringBuilder();
-        agentAssignments.forEach((k, v) -> agentParam.append(k).append(":").append(v).append(","));
-
-        PythonExecutionResult result = pythonBridge.runWorkflow(
-                choice,
-                topic,
-                sectionsParam,
-                prioParam.toString(),
-                agentParam.toString()
-        );
-
-        // PERSISTENCE CONFIRMATION
-        TerminalUI.printBreadcrumb(workflowName, "Persistence & Artifacts");
-        if (result.isSuccess()) {
-            TerminalUI.printSuccess("All sections generated, reviewed, and approved!");
-            if (result.getOutputFile() != null && !result.getOutputFile().isEmpty()) {
-                TerminalUI.printInfo("Compiled Document Artifact: " + result.getOutputFile());
-            }
-
-            if (userActivityDAO != null) {
-                String sectionsWorked = String.join(", ", selectedSections);
-                String agentsUsed = (result.getAgentsUsed() != null && !result.getAgentsUsed().isEmpty())
-                        ? String.join(", ", result.getAgentsUsed())
-                        : String.join(", ", new HashSet<>(agentAssignments.values()));
-
-                UserActivity activity = new UserActivity("Student", topic, workflowName, sectionsWorked, agentsUsed);
-                userActivityDAO.recordActivity(activity);
-                TerminalUI.printSuccess("Execution audit successfully recorded in MySQL table 'pharoah_db.user_activity'.");
-            }
+        if (depIn.equalsIgnoreCase("NONE") || depIn.isEmpty()) {
+            target.clearDependencies();
+            TerminalUI.printSuccess(target.getId() + " is now independent.");
         } else {
-            TerminalUI.printError("Swarm execution encountered an error.");
+            target.clearDependencies();
+            for (String dep : depIn.split(",")) {
+                target.addDependency(dep.trim());
+            }
+            TerminalUI.printSuccess("Dependencies updated for " + target.getId());
+        }
+    }
+
+    private int configureWorkerThreads(int current) {
+        System.out.printf("  Enter max concurrent worker threads (1-16) [current: %d]: ", current);
+        try {
+            int val = Integer.parseInt(scanner.nextLine().trim());
+            if (val >= 1 && val <= 16) {
+                TerminalUI.printSuccess("Max concurrent worker threads set to: " + val);
+                return val;
+            }
+        } catch (Exception ignored) {}
+        return current;
+    }
+
+    private void addNewAgent(List<AgentDeployment> agents) {
+        String newId = String.format("agent-%02d", agents.size() + 1);
+        System.out.print("  Agent Name: ");
+        String name = scanner.nextLine().trim();
+        System.out.print("  Responsibility description: ");
+        String resp = scanner.nextLine().trim();
+        System.out.print("  Priority ([H]igh, [M]edium, [L]ow): ");
+        String pIn = scanner.nextLine().trim().toUpperCase();
+        Priority prio = pIn.startsWith("H") ? Priority.HIGH : (pIn.startsWith("L") ? Priority.LOW : Priority.MEDIUM);
+        System.out.print("  Dependencies (comma-separated IDs or NONE): ");
+        String depsIn = scanner.nextLine().trim();
+        List<String> deps = new ArrayList<>();
+        if (!depsIn.equalsIgnoreCase("NONE") && !depsIn.isBlank()) {
+            for (String d : depsIn.split(",")) deps.add(d.trim());
+        }
+
+        AgentDeployment created = new AgentDeployment(newId, name, "CUSTOM_SPECIALIST", resp, prio, deps);
+        agents.add(created);
+        TerminalUI.printSuccess("Added new agent: " + created.getId() + " - " + created.getName());
+    }
+
+    private void removeAgent(List<AgentDeployment> agents) {
+        if (agents.size() <= 1) {
+            TerminalUI.printWarning("Cannot remove: At least one agent is required.");
+            return;
+        }
+        System.out.print("  Enter Agent ID to remove: ");
+        String id = scanner.nextLine().trim();
+        agents.removeIf(a -> a.getId().equalsIgnoreCase(id));
+        TerminalUI.printSuccess("Agent removed if ID existed.");
+    }
+
+    private void launchWorkflow(WorkflowCategory category, String topic, List<AgentDeployment> agents, int maxWorkers) {
+        TerminalUI.printBreadcrumb(category.getDisplayName(), "Concurrent Orchestration");
+
+        try {
+            WorkflowPlan plan = new WorkflowPlan(category, topic, agents, maxWorkers);
+            TerminalUI.printInfo("Validated DAG dependency graph. Initiating Java multithreading swarm...\n");
+
+            WorkflowExecutionResult result = workflowOrchestrator.executeWorkflow(plan);
+
+            if (result.isSuccess()) {
+                TerminalUI.printSuccess("Workflow completed successfully!");
+                TerminalUI.printInfo("Final Document Artifact: " + result.getOutputFilePath());
+                TerminalUI.printInfo(String.format("Total Latency: %.2f seconds | Deployed Swarm: %d Agents",
+                        result.getDurationSeconds(), result.getAgentsUsed().size()));
+            } else {
+                TerminalUI.printError("Workflow encountered errors during execution.");
+            }
+
+        } catch (Exception e) {
+            TerminalUI.printError("Orchestration failed: " + e.getMessage());
         }
 
         System.out.print("\n  Press Enter to return to main menu...");
@@ -289,17 +298,17 @@ public class PharoahCLI {
         TerminalUI.printBreadcrumb("MySQL Activity History");
 
         if (userActivityDAO == null) {
-            TerminalUI.printWarning("Database connection is offline. Showing session history only.");
+            TerminalUI.printWarning("Database persistence is offline.");
             return;
         }
 
         List<UserActivity> activities = userActivityDAO.getAllActivities();
         if (activities.isEmpty()) {
-            TerminalUI.printInfo("No previous activities recorded in MySQL yet. Run any workflow to log execution.");
+            TerminalUI.printInfo("No previous activities recorded in MySQL yet.");
         } else {
-            TerminalUI.printSectionHeader(String.format("PERSISTENT ACTIVITY AUDIT TRAIL (%d RECORDS)", activities.size()));
+            TerminalUI.printSectionHeader(String.format("PERSISTENT USER ACTIVITY LOG (%d RECORDS)", activities.size()));
             for (UserActivity a : activities) {
-                System.out.printf("  #%-3d │ %-20s │ %-28s │ %s\n",
+                System.out.printf("  #%-3d │ %-22s │ %-28s │ %s\n",
                         a.getActivityId(), a.getWorkflowType(),
                         a.getTopic().length() > 28 ? a.getTopic().substring(0, 25) + "..." : a.getTopic(),
                         a.getStatus());
@@ -315,7 +324,7 @@ public class PharoahCLI {
     }
 
     // =========================================================================
-    // ADVANCED MODULES SUB-MENU
+    // ADVANCED TOOLS SUB-MENU
     // =========================================================================
 
     private void handleAdvancedMenu() throws Exception {
@@ -341,7 +350,7 @@ public class PharoahCLI {
                 case "1" -> handleProjectMenu();
                 case "2" -> handleTaskMenu();
                 case "3" -> handleAgentMenu();
-                case "4" -> handleOrchestrationMenu();
+                case "4" -> handleLegacyDecomposition();
                 case "5" -> handleKnowledgeMenu();
                 case "6" -> handleAnalyticsMenu();
                 case "0", "back" -> inSub = false;
@@ -374,7 +383,7 @@ public class PharoahCLI {
                 System.out.print("  Enter Description: ");
                 String desc = scanner.nextLine().trim();
                 Project p = projectService.createProject(name, desc);
-                TerminalUI.printSuccess("Project created and activated: " + p.getName());
+                TerminalUI.printSuccess("Project created: " + p.getName());
             }
             case "3" -> {
                 List<Project> list = projectService.listAllProjects();
@@ -454,35 +463,23 @@ public class PharoahCLI {
 
     private void handleAgentMenu() throws SQLException {
         TerminalUI.printBreadcrumb("Advanced Modules", "Agent Registry");
-        System.out.println("  1. List Registered Agents");
-        System.out.println("  2. Register Configurable Agent");
-        System.out.print("  Choose (1-2): ");
-        String sub = scanner.nextLine().trim();
-
-        if ("1".equals(sub)) {
-            List<AgentConfig> agents = agentService.listAllAgents();
-            for (AgentConfig a : agents) {
-                System.out.printf("   • %-24s | Role: %-20s | Active: %b\n", a.getName(), a.getRole(), a.isActive());
-            }
-        } else if ("2".equals(sub)) {
-            System.out.print("  Agent Name: ");
-            String name = scanner.nextLine().trim();
-            AgentConfig created = agentService.registerAgent(name, AgentRole.RESEARCH_AGENT, "Custom guidelines", "MOCK_HEURISTIC");
-            TerminalUI.printSuccess("Agent registered: " + created.getName());
+        List<AgentConfig> agents = agentService.listAllAgents();
+        for (AgentConfig a : agents) {
+            System.out.printf("   • %-24s | Role: %-20s | Active: %b\n", a.getName(), a.getRole(), a.isActive());
         }
     }
 
-    private void handleOrchestrationMenu() throws Exception {
+    private void handleLegacyDecomposition() throws Exception {
         Project active = projectService.getActiveProject();
         String pid = (active != null) ? active.getProjectId() : "GLOBAL";
 
-        TerminalUI.printBreadcrumb("Advanced Modules", "Java Orchestrator");
+        TerminalUI.printBreadcrumb("Advanced Modules", "Task Decomposition");
         System.out.print("  Enter high-level objective: ");
         String title = scanner.nextLine().trim();
         System.out.print("  Enter domain topic: ");
         String topic = scanner.nextLine().trim();
 
-        List<Task> subtasks = orchestrator.decomposeObjective(pid, title, topic);
+        List<Task> subtasks = legacyOrchestrator.decomposeObjective(pid, title, topic);
         TerminalUI.printSuccess(String.format("Decomposed into %d subtasks with dependency graph.", subtasks.size()));
     }
 
@@ -523,46 +520,6 @@ public class PharoahCLI {
             System.out.println("\n  1. Workload by Category (Collectors.groupingBy):");
             analyticsEngine.countTasksByType(tasks).forEach((t, count) ->
                     System.out.printf("     %-20s : %d tasks\n", t, count));
-        }
-    }
-
-    private List<String> getStandardSectionsForWorkflow(String choice) {
-        return switch (choice) {
-            case "2" -> List.of("Research Question", "Literature Context", "Data Collection", "Evidence Analysis", "Findings & Implications", "Conclusion");
-            case "3" -> List.of("Executive Summary", "Problem Statement", "Current Observations", "Technical Analysis", "Recommendations", "Next Steps");
-            case "4" -> List.of("Title & Hook", "Introduction", "Core Concepts", "Practical Examples & Code", "Key Takeaways");
-            case "5" -> List.of("System Overview", "Architecture & Modules", "Installation & Setup", "Configuration", "API Reference", "Troubleshooting & FAQ");
-            case "6" -> List.of("Executive Summary", "Market Problem", "Proposed Solution", "Implementation Roadmap", "Budget & ROI Forecast", "Conclusion & Call to Action");
-            case "7" -> List.of("Analysis Objective", "Data Ingestion & Scope", "Statistical Metrics", "Pattern Detection", "Actionable Insights");
-            case "8" -> List.of("Project Overview", "Core Requirements", "Implementation Plan", "Verification");
-            default -> List.of("Abstract", "Introduction", "Literature Review", "Research Gap", "Methodology", "Data Analysis", "Results and Discussion", "Conclusion", "References");
-        };
-    }
-
-    private String getDefaultPriorityForSection(String section) {
-        String lower = section.toLowerCase();
-        if (lower.contains("literature") || lower.contains("gap") || lower.contains("methodology") ||
-            lower.contains("research") || lower.contains("question") || lower.contains("problem") ||
-            lower.contains("architecture") || lower.contains("objective") || lower.contains("executive")) {
-            return "HIGH";
-        } else if (lower.contains("references") || lower.contains("faq") || lower.contains("takeaways") || lower.contains("next steps")) {
-            return "LOW";
-        }
-        return "MEDIUM";
-    }
-
-    private String getRecommendedAgentForSection(String section) {
-        String lower = section.toLowerCase();
-        if (lower.contains("literature") || lower.contains("research") || lower.contains("reference") || lower.contains("background") || lower.contains("context")) {
-            return "Research Specialist";
-        } else if (lower.contains("gap") || lower.contains("analysis") || lower.contains("problem") || lower.contains("architecture") || lower.contains("evidence")) {
-            return "Analysis Specialist";
-        } else if (lower.contains("data") || lower.contains("metric") || lower.contains("statistic") || lower.contains("budget") || lower.contains("code")) {
-            return "Data & Metrics Analyst";
-        } else if (lower.contains("review") || lower.contains("audit") || lower.contains("verification")) {
-            return "Quality Reviewer";
-        } else {
-            return "Technical Writer";
         }
     }
 }
