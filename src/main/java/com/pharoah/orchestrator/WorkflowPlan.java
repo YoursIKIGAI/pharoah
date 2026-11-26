@@ -10,17 +10,23 @@ public class WorkflowPlan {
     private final String topic;
     private final List<AgentDeployment> agents;
     private int maxConcurrentWorkers;
+    private ExecutionMode executionMode;
 
-    public WorkflowPlan(WorkflowCategory category, String topic, List<AgentDeployment> agents, int maxConcurrentWorkers) {
-        this.category = category;
-        this.topic = topic;
+    public WorkflowPlan(WorkflowCategory category, String topic, List<AgentDeployment> agents, int maxConcurrentWorkers, ExecutionMode executionMode) {
+        this.category = (category != null) ? category : WorkflowCategory.CUSTOM_WORKFLOW;
+        this.topic = (topic != null) ? topic : "Multi-Agent Workflow";
         this.agents = new ArrayList<>(agents);
         this.maxConcurrentWorkers = Math.max(1, maxConcurrentWorkers);
+        this.executionMode = (executionMode != null) ? executionMode : ExecutionMode.PARALLEL;
         validatePlan();
     }
 
+    public WorkflowPlan(WorkflowCategory category, String topic, List<AgentDeployment> agents, int maxConcurrentWorkers) {
+        this(category, topic, agents, maxConcurrentWorkers, ExecutionMode.PARALLEL);
+    }
+
     public WorkflowPlan(WorkflowCategory category, String topic, List<AgentDeployment> agents) {
-        this(category, topic, agents, 4);
+        this(category, topic, agents, 4, ExecutionMode.PARALLEL);
     }
 
     // Validates that all dependency references exist and detects cycle loops in the DAG
@@ -99,22 +105,11 @@ public class WorkflowPlan {
         this.maxConcurrentWorkers = Math.max(1, maxConcurrentWorkers);
     }
 
-    public AgentDeployment getAgentById(String id) {
-        for (AgentDeployment a : agents) {
-            if (a.getId().equalsIgnoreCase(id)) return a;
-        }
-        return null;
+    public ExecutionMode getExecutionMode() {
+        return executionMode;
     }
 
-    public int getIndependentCount() {
-        int count = 0;
-        for (AgentDeployment a : agents) {
-            if (a.isIndependent()) count++;
-        }
-        return count;
-    }
-
-    public int getDependentCount() {
-        return agents.size() - getIndependentCount();
+    public void setExecutionMode(ExecutionMode executionMode) {
+        this.executionMode = executionMode;
     }
 }

@@ -5,7 +5,6 @@ import com.pharoah.ai.AIService;
 import com.pharoah.ai.RemoteHttpAIService;
 import com.pharoah.analytics.TaskAnalyticsEngine;
 import com.pharoah.cli.PharoahCLI;
-import com.pharoah.cli.TerminalUI;
 import com.pharoah.concurrency.ThreadPoolManager;
 import com.pharoah.config.AppConfig;
 import com.pharoah.core.model.UserActivity;
@@ -72,17 +71,8 @@ public class PharoahApplication {
         // VARIJ: Central Multi-Agent Orchestration Engine
         this.workflowOrchestrator = new WorkflowOrchestrator(userActivityDAO);
 
-        // Terminal CLI
-        this.cli = new PharoahCLI(
-                projectService,
-                taskService,
-                agentService,
-                legacyOrchestrator,
-                knowledgeService,
-                documentService,
-                analyticsEngine,
-                userActivityDAO
-        );
+        // Streamlined Terminal CLI
+        this.cli = new PharoahCLI(userActivityDAO);
     }
 
     public static void main(String[] args) {
@@ -101,73 +91,84 @@ public class PharoahApplication {
 
     private void printStatus() {
         AppConfig cfg = AppConfig.getInstance();
-        TerminalUI.printBanner("2.0-LTS", cfg.getDbType(), dbFactory.isMySqlActive());
-        TerminalUI.printSectionHeader("SYSTEM HEALTH & CONFIGURATION");
-        System.out.printf("  Database Engine : %s (Active: %b)\n", dbFactory.getDbType(), dbFactory.isMySqlActive());
-        System.out.printf("  Database URL    : %s\n", cfg.getDbUrl());
-        System.out.printf("  Database User   : %s\n", cfg.getDbUser());
-        System.out.printf("  Database Auth   : %s\n", cfg.getMaskedPassword());
-        System.out.printf("  Worker Pool     : %d Available CPU Processors\n", poolManager.getPoolSize());
-        System.out.printf("  Active Project  : %s\n", projectService.getActiveProject() != null ? projectService.getActiveProject().getName() : "None");
-        TerminalUI.printSectionFooter();
+        System.out.println("\n==================================================");
+        System.out.println("PHAROAH: System Status and Health");
+        System.out.println("==================================================");
+        System.out.printf("Database Engine : %s (Active: %b)\n", dbFactory.getDbType(), dbFactory.isMySqlActive());
+        System.out.printf("Database URL    : %s\n", cfg.getDbUrl());
+        System.out.printf("Database User   : %s\n", cfg.getDbUser());
+        System.out.printf("Database Auth   : %s\n", cfg.getMaskedPassword());
+        System.out.printf("Worker Pool     : %d Available CPU Processors\n", poolManager.getPoolSize());
+        System.out.printf("Active Project  : %s\n", projectService.getActiveProject() != null ? projectService.getActiveProject().getName() : "None");
+        System.out.println("==================================================\n");
     }
 
     // VARIJ, ASHUTOSH, SANCHIT: Automated end-to-end demo validating genuine concurrent multi-agent orchestration
     public void runAutomatedDemo() {
-        TerminalUI.printBanner("2.0-LTS", dbFactory.getDbType(), dbFactory.isMySqlActive());
-        TerminalUI.printSectionHeader("JAVA CONCURRENT MULTI-AGENT ORCHESTRATION DEMO");
+        System.out.println("\n==================================================");
+        System.out.println("PHAROAH: Automated Multi-Agent Orchestration Demo");
+        System.out.println("==================================================");
 
         try {
-            // STEP 1-5 DEMO: Execute Java-Native Multi-Agent Swarm for "Research Paper"
-            TerminalUI.printBreadcrumb("Demo", "Multi-Agent Swarm", "Research Paper (IEEE/ACM)");
             String topic = "Impact of Artificial Intelligence on Cybersecurity";
-            System.out.println("  Inquiry Topic   : " + topic);
-            System.out.println("  Category        : Research Paper (6 Agents, DAG Dependencies, Priorities)");
-            System.out.println("  Execution Model : Java FixedThreadPool (4 Concurrent Workers) with Synchronized Locks\n");
+            System.out.println("Inquiry Topic   : " + topic);
+            System.out.println("Category        : Research Paper (6 Agents, Parallel Execution)");
+            System.out.println("Execution Model : Java FixedThreadPool with synchronized monitor coordination\n");
 
             List<AgentDeployment> agents = WorkflowCategory.RESEARCH_PAPER.createProposedDeployment(topic);
-            WorkflowPlan plan = new WorkflowPlan(WorkflowCategory.RESEARCH_PAPER, topic, agents, 4);
+            WorkflowPlan plan = new WorkflowPlan(WorkflowCategory.RESEARCH_PAPER, topic, agents, 4, ExecutionMode.PARALLEL);
 
             WorkflowExecutionResult result = workflowOrchestrator.executeWorkflow(plan);
 
-            System.out.println();
-            TerminalUI.printSuccess(String.format("Multi-Agent Swarm completed in %.2fs!", result.getDurationSeconds()));
-            TerminalUI.printInfo("Saved Artifact: " + result.getOutputFilePath());
-
-            // PERSISTENCE VERIFICATION
-            TerminalUI.printBreadcrumb("Demo", "MySQL Persistence Verification");
-            List<UserActivity> activities = userActivityDAO.getAllActivities();
-            System.out.printf("  Total Records in MySQL: %d\n", activities.size());
-            if (!activities.isEmpty()) {
-                System.out.println("  Latest Audit Row: " + activities.get(0));
+            System.out.println("\n==================================================");
+            System.out.println("DEMO GENERATED OUTPUT SAMPLE");
+            System.out.println("==================================================");
+            if (!plan.getAgents().isEmpty()) {
+                AgentDeployment firstAgent = plan.getAgents().get(0);
+                System.out.println(firstAgent.getName() + ": " + firstAgent.getResponsibility());
+                System.out.println();
+                String content = result.getAgentOutputs().get(firstAgent.getId()) != null
+                        ? result.getAgentOutputs().get(firstAgent.getId()).getContent()
+                        : "Sample content generated.";
+                System.out.println(content);
             }
 
-            // Java Project Management Verification
-            TerminalUI.printBreadcrumb("Demo", "Project Isolation");
+            System.out.println("\n==================================================");
+            System.out.printf("Multi-Agent Swarm completed in %.2fs!\n", result.getDurationSeconds());
+            System.out.println("Saved Artifact: " + result.getOutputFilePath());
+
+            // Persistence Verification
+            List<UserActivity> activities = userActivityDAO.getAllActivities();
+            System.out.printf("Total Records in MySQL: %d\n", activities.size());
+            if (!activities.isEmpty()) {
+                System.out.println("Latest Audit Row: " + activities.get(0));
+            }
+
+            // Project Isolation
             Project project = projectService.createProject("Cybersecurity LLM Invariants", "Evaluates defensive invariants against prompt injections.");
-            TerminalUI.printSuccess("Active Project: " + project.getName() + " (ID: " + project.getProjectId().substring(0, Math.min(8, project.getProjectId().length())) + ")");
+            System.out.println("Active Project: " + project.getName() + " (ID: " + project.getProjectId().substring(0, Math.min(8, project.getProjectId().length())) + ")");
 
             KnowledgeResource res = knowledgeService.saveResource(project.getProjectId(),
                     "Adversarial Robustness in LLM Agents", ResourceType.URL, "https://arxiv.org/abs/2302.12173", "SECURITY");
-            TerminalUI.printSuccess("Persisted Knowledge Asset: " + res.getTitle() + " (" + res.getResourceType() + ")");
+            System.out.println("Persisted Knowledge Asset: " + res.getTitle() + " (" + res.getResourceType() + ")");
 
             // Document Compilation Verification
-            TerminalUI.printBreadcrumb("Demo", "Document Compilation");
             Document doc = documentService.createDocumentWithTemplate(project.getProjectId(), "Cybersecurity Defense Paper", DocumentType.RESEARCH_PAPER);
             List<DocumentSection> sections = documentService.getSections(doc.getDocumentId());
             if (!sections.isEmpty()) {
                 DocumentSection firstSec = sections.get(0);
                 documentService.updateSectionContent(firstSec.getSectionId(), "Formal verification of prompt guardrails across autonomous multi-agent systems.");
                 documentService.reviewSection(firstSec.getSectionId(), true);
-                TerminalUI.printSuccess("Drafted & Approved Section: " + firstSec.getSectionName());
+                System.out.println("Drafted & Approved Section: " + firstSec.getSectionName());
             }
 
-            TerminalUI.printSectionHeader("DEMO VERIFICATION COMPLETE");
-            TerminalUI.printSuccess("Genuine Java multithreaded multi-agent orchestration & MySQL persistence verified!");
-            TerminalUI.printSectionFooter();
+            System.out.println("\n==================================================");
+            System.out.println("DEMO VERIFICATION COMPLETE");
+            System.out.println("Genuine Java multithreaded multi-agent orchestration & MySQL persistence verified.");
+            System.out.println("==================================================\n");
 
         } catch (Exception e) {
-            TerminalUI.printError("Demo encountered error: " + e.getMessage());
+            System.out.println("Demo encountered error: " + e.getMessage());
             e.printStackTrace();
         }
     }

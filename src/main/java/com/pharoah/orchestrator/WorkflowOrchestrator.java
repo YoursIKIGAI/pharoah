@@ -1,7 +1,6 @@
 package com.pharoah.orchestrator;
 
-import com.pharoah.cli.TerminalUI;
-import com.pharoah.config.AppConfig;
+import com.pharoah.core.enums.Priority;
 import com.pharoah.core.model.UserActivity;
 import com.pharoah.persistence.dao.UserActivityDAO;
 
@@ -14,8 +13,9 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 // VARIJ: Central Multi-Agent Orchestration Engine.
-// Manages DAG dependency graphs, schedules concurrent tasks to ThreadPoolManager,
-// coordinates inter-agent data passing, renders live dashboard, and compiles final artifacts.
+// Executes agents concurrently using Java ExecutorService & FixedThreadPool.
+// Supports both Parallel and Priority-based scheduling.
+// Maintains thread-safe outputs and records execution activity in MySQL.
 public class WorkflowOrchestrator {
 
     private final UserActivityDAO userActivityDAO;
@@ -23,17 +23,15 @@ public class WorkflowOrchestrator {
 
     public WorkflowOrchestrator(UserActivityDAO userActivityDAO) {
         this.userActivityDAO = userActivityDAO;
-        // Allows customizing processing pace via config.properties
-        this.agentLatencyMs = 700L;
+        this.agentLatencyMs = 600L;
     }
 
     public WorkflowOrchestrator() {
         this(null);
     }
 
-    // VARIJ: Coordinates the end-to-end concurrent execution of a WorkflowPlan
     public WorkflowExecutionResult executeWorkflow(WorkflowPlan plan) {
-        int poolSize = plan.getMaxConcurrentWorkers();
+        int poolSize = Math.max(1, Math.min(plan.getAgents().size(), plan.getMaxConcurrentWorkers()));
         ThreadFactory factory = new ThreadFactory() {
             private int count = 1;
             @Override
@@ -51,50 +49,26 @@ public class WorkflowOrchestrator {
         Map<String, Future<AgentOutput>> runningFutures = new ConcurrentHashMap<>();
         AtomicBoolean isRunning = new AtomicBoolean(true);
 
-        // Initial render of dashboard
-        DashboardView.render(context, poolSize);
+        System.out.println("\nDeploying agents across " + poolSize + " worker threads (" + plan.getExecutionMode().getDisplayName() + ")...\n");
+        System.out.println("Live Execution Status:");
 
         try {
-            // Main Orchestration Loop
-            while (!context.isAllCompleted() && isRunning.get()) {
-
-                // 1. Discover all newly eligible agents (dependencies satisfied)
-                List<AgentDeployment> readyAgents = context.getEligibleReadyAgents();
-                for (AgentDeployment agent : readyAgents) {
-                    if (dispatchedAgentIds.add(agent.getId())) {
-                        // Mark as running in context
-                        context.markAgentRunning(agent.getId(), "Queued");
-
-                        SpecializedAgentTask task = new SpecializedAgentTask(
-                                agent,
-                                plan.getTopic(),
-                                context,
-                                agentLatencyMs
-                        );
-
-                        Future<AgentOutput> future = executor.submit(task);
-                        runningFutures.put(agent.getId(), future);
-                    }
-                }
-
-                // 2. Refresh terminal dashboard
-                DashboardView.render(context, poolSize);
-
-                // 3. Await next state transition or heartbeat tick
-                context.awaitStateChange(250);
+            if (plan.getExecutionMode() == ExecutionMode.PRIORITY_BASED) {
+                // Priority-Based Execution: HIGH -> MEDIUM -> LOW
+                executePriorityPhased(plan, context, executor, dispatchedAgentIds, runningFutures);
+            } else {
+                // Parallel Execution: All eligible independent agents concurrently
+                executeParallel(plan, context, executor, dispatchedAgentIds, runningFutures, isRunning);
             }
-
-            // Final dashboard render
-            DashboardView.render(context, poolSize);
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            TerminalUI.printError("Workflow orchestration interrupted!");
+            System.out.println("Execution was interrupted.");
         } finally {
             isRunning.set(false);
             executor.shutdown();
             try {
-                if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                if (!executor.awaitTermination(3, TimeUnit.SECONDS)) {
                     executor.shutdownNow();
                 }
             } catch (InterruptedException ignored) {
@@ -102,15 +76,120 @@ public class WorkflowOrchestrator {
             }
         }
 
-        // Stage 4: Final Orchestration & Synthesis
+        System.out.println("\nAll agents have completed their execution.");
         return synthesizeAndPersist(plan, context);
     }
 
-    // VARIJ: Combines agent section outputs, formats final markdown artifact, and records activity in MySQL
-    private WorkflowExecutionResult synthesizeAndPersist(WorkflowPlan plan, WorkflowContext context) {
-        TerminalUI.printBreadcrumb("Workflow Orchestration", "Document Compilation & Persistence");
+    // Parallel Execution Strategy
+    private void executeParallel(WorkflowPlan plan,
+                                 WorkflowContext context,
+                                 ExecutorService executor,
+                                 Set<String> dispatchedAgentIds,
+                                 Map<String, Future<AgentOutput>> runningFutures,
+                                 AtomicBoolean isRunning) throws InterruptedException {
 
-        List<String> documentSections = new ArrayList<>();
+        Set<String> reportedCompleted = new HashSet<>();
+
+        while (!context.isAllCompleted() && isRunning.get()) {
+            List<AgentDeployment> readyAgents = context.getEligibleReadyAgents();
+            for (AgentDeployment agent : readyAgents) {
+                if (dispatchedAgentIds.add(agent.getId())) {
+                    context.markAgentRunning(agent.getId(), "Queued");
+                    System.out.println("  " + agent.getName() + ": Running");
+
+                    SpecializedAgentTask task = new SpecializedAgentTask(
+                            agent,
+                            agent.getResponsibility(),
+                            context,
+                            agentLatencyMs
+                    );
+
+                    Future<AgentOutput> future = executor.submit(task);
+                    runningFutures.put(agent.getId(), future);
+                }
+            }
+
+            // Check completed futures
+            for (Map.Entry<String, Future<AgentOutput>> entry : runningFutures.entrySet()) {
+                if (entry.getValue().isDone() && reportedCompleted.add(entry.getKey())) {
+                    AgentDeployment agent = findAgent(plan, entry.getKey());
+                    if (agent != null) {
+                        System.out.println("  " + agent.getName() + ": Completed");
+                    }
+                }
+            }
+
+            context.awaitStateChange(150);
+        }
+    }
+
+    // Priority-Based Execution Strategy (HIGH -> MEDIUM -> LOW)
+    private void executePriorityPhased(WorkflowPlan plan,
+                                       WorkflowContext context,
+                                       ExecutorService executor,
+                                       Set<String> dispatchedAgentIds,
+                                       Map<String, Future<AgentOutput>> runningFutures) throws InterruptedException {
+
+        Priority[] priorityPhases = new Priority[]{Priority.HIGH, Priority.MEDIUM, Priority.LOW};
+
+        for (Priority phase : priorityPhases) {
+            List<AgentDeployment> phaseAgents = new ArrayList<>();
+            for (AgentDeployment a : plan.getAgents()) {
+                if (a.getPriority() == phase) {
+                    phaseAgents.add(a);
+                }
+            }
+
+            if (phaseAgents.isEmpty()) continue;
+
+            // Mark other lower-priority agents as waiting
+            for (AgentDeployment a : plan.getAgents()) {
+                if (a.getPriority() != phase && !dispatchedAgentIds.contains(a.getId())) {
+                    System.out.println("  " + a.getName() + ": Waiting");
+                }
+            }
+
+            // Dispatch all agents of this priority phase
+            List<Future<AgentOutput>> phaseFutures = new ArrayList<>();
+            for (AgentDeployment agent : phaseAgents) {
+                if (dispatchedAgentIds.add(agent.getId())) {
+                    context.markAgentRunning(agent.getId(), "Queued");
+                    System.out.println("  " + agent.getName() + ": Running (" + phase + " Priority)");
+
+                    SpecializedAgentTask task = new SpecializedAgentTask(
+                            agent,
+                            agent.getResponsibility(),
+                            context,
+                            agentLatencyMs
+                    );
+
+                    Future<AgentOutput> future = executor.submit(task);
+                    phaseFutures.add(future);
+                    runningFutures.put(agent.getId(), future);
+                }
+            }
+
+            // Wait for this priority phase to complete before advancing to next priority
+            for (int i = 0; i < phaseFutures.size(); i++) {
+                try {
+                    phaseFutures.get(i).get();
+                    AgentDeployment completedAgent = phaseAgents.get(i);
+                    System.out.println("  " + completedAgent.getName() + ": Completed");
+                } catch (ExecutionException ignored) {}
+            }
+        }
+    }
+
+    private AgentDeployment findAgent(WorkflowPlan plan, String id) {
+        for (AgentDeployment a : plan.getAgents()) {
+            if (a.getId().equals(id)) return a;
+        }
+        return null;
+    }
+
+    // Compiles clean document artifact and records audit in MySQL
+    private WorkflowExecutionResult synthesizeAndPersist(WorkflowPlan plan, WorkflowContext context) {
+        StringBuilder docBuilder = new StringBuilder();
         List<String> deployedAgentNames = new ArrayList<>();
         List<String> sectionTitles = new ArrayList<>();
 
@@ -118,76 +197,50 @@ public class WorkflowOrchestrator {
             deployedAgentNames.add(a.getName());
             sectionTitles.add(a.getResponsibility());
             AgentOutput out = context.getOutputs().get(a.getId());
-            if (out != null && out.isSuccess()) {
-                documentSections.add(out.getContent());
+
+            docBuilder.append(a.getName()).append(": ").append(a.getResponsibility()).append("\n\n");
+            if (out != null && out.getContent() != null && !out.getContent().isBlank()) {
+                docBuilder.append(out.getContent().trim()).append("\n\n");
             } else {
-                documentSections.add("### " + a.getResponsibility() + "\n*Section output unavailable due to processing interruption.*\n");
+                docBuilder.append("Content generation was interrupted for this agent.\n\n");
             }
         }
 
+        String fullDocument = docBuilder.toString().trim();
         double totalDurationSec = context.getElapsedTimeMs() / 1000.0;
-        String fullDocument = String.format("""
-            # %s
-            
-            *Generated by PHAROAH Multi-Agent Orchestration System*
-            *Category: %s | Execution Latency: %.2fs | Active Swarm: %d Agents*
-            
-            ---
-            
-            %s
-            
-            ---
-            
-            ### Final Consistency & Verification Sign-Off
-            > **ORCHESTRATOR COORDINATOR SUMMARY**
-            > - **Total Sections Orchestrated:** %d
-            > - **Inter-Agent Dependency Graph:** Verified without circular deadlocks
-            > - **Concurrency Execution Model:** Java FixedThreadPool with synchronized monitor coordination
-            > - **Status:** APPROVED FOR ACADEMIC & TECHNICAL DISSEMINATION
-            """,
-                plan.getTopic(),
-                plan.getCategory().getDisplayName(),
-                totalDurationSec,
-                plan.getAgents().size(),
-                String.join("\n\n---\n\n", documentSections),
-                plan.getAgents().size()
-        );
 
-        // Save to outputs directory
+        // Save clean text document into outputs directory
         File outDir = new File("outputs");
         if (!outDir.exists()) outDir.mkdirs();
 
-        String safeTopic = plan.getTopic().replaceAll("[^a-zA-Z0-9_-]", "_");
-        if (safeTopic.length() > 35) safeTopic = safeTopic.substring(0, 35);
-        File artifactFile = new File(outDir, safeTopic + "_" + System.currentTimeMillis() + ".md");
+        String safeName = "pharoah_output_" + System.currentTimeMillis() + ".txt";
+        File artifactFile = new File(outDir, safeName);
 
         try (FileWriter writer = new FileWriter(artifactFile, StandardCharsets.UTF_8)) {
             writer.write(fullDocument);
-            TerminalUI.printSuccess("Consolidated document artifact saved: " + artifactFile.getPath());
-        } catch (IOException e) {
-            TerminalUI.printWarning("Failed to write output file: " + e.getMessage());
-        }
+        } catch (IOException ignored) {}
 
-        // Persist to MySQL database table: user_activity
+        // Persist to MySQL user_activity table
         String sectionsWorked = String.join(", ", sectionTitles);
         String agentsUsed = String.join(", ", deployedAgentNames);
 
         if (userActivityDAO != null) {
-            UserActivity activity = new UserActivity(
-                    "Student",
-                    plan.getTopic(),
-                    plan.getCategory().getDisplayName(),
-                    sectionsWorked,
-                    agentsUsed
-            );
-            userActivityDAO.recordActivity(activity);
-            TerminalUI.printSuccess("Audit record persisted to MySQL 'pharoah_db.user_activity'.");
+            try {
+                UserActivity activity = new UserActivity(
+                        "User",
+                        plan.getTopic(),
+                        plan.getExecutionMode().getDisplayName(),
+                        sectionsWorked,
+                        agentsUsed
+                );
+                userActivityDAO.recordActivity(activity);
+            } catch (Exception ignored) {}
         }
 
         return new WorkflowExecutionResult(
                 !context.getOutputs().isEmpty(),
                 plan.getTopic(),
-                plan.getCategory().getDisplayName(),
+                plan.getExecutionMode().getDisplayName(),
                 artifactFile.getPath(),
                 totalDurationSec,
                 deployedAgentNames,
