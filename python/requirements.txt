@@ -1,0 +1,4 @@
+# ASHUTOSH: Python dependencies for PHAROAH Multi-Agent Swarm
+# PHAROAH core agents use Python 3.8+ standard libraries (sys, os, time, json, argparse).
+# Optional external libraries for AI/LLM expansion:
+requests>=2.28.0

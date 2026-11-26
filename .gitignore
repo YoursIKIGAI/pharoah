@@ -17,3 +17,9 @@ target/
 # Operating System files
 Thumbs.db
 .DS_Store
+
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+

@@ -1,191 +1,96 @@
 # 🏛️ PHAROAH: System Architecture & Technical Specifications
 
-**Architecture Style:** Layered Hexagonal Architecture (Terminal-First)  
+**Architecture Style:** Hybrid Layered Architecture (Terminal-First Java UI + Python Swarm)  
 **Database Engine:** MySQL 8.0 (InnoDB) with SQLite fallback  
-**Platform:** Java 21 LTS
+**Platforms:** Java 21 LTS + Python 3.8+
 
 ---
 
-## 1. Architectural Layers
+## 1. Architectural Layers & Multi-Agent Swarm
 
-PHAROAH follows a clean 4-tier layered architecture:
+PHAROAH combines a high-performance Java terminal runtime with a visible Python multi-agent swarm:
 
 ```mermaid
 flowchart TD
-    subgraph Presentation ["Presentation Layer"]
+    subgraph Presentation ["Presentation Layer (Java 21)"]
         CLI["PharoahCLI (Terminal Application)"]
+        MENU["Format-Driven Workflow Selector (1-8)"]
     end
 
-    subgraph Service ["Service Layer (Business Logic)"]
-        PS["ProjectService"]
-        TS["TaskService"]
-        AS["AgentService"]
-        KS["KnowledgeService"]
-        DS["DocumentWorkflowService"]
+    subgraph Bridge ["Execution Bridge Layer"]
+        PB["PythonAgentBridge (ProcessBuilder)"]
+        STREAM["Real-Time Stdout Streaming Engine"]
     end
 
-    subgraph Core ["Orchestration & Concurrency Layer"]
-        ORCH["TaskOrchestrator"]
-        POOL["ThreadPoolManager (ExecutorService)"]
-        QUEUE["BoundedTaskQueue (wait/notify)"]
-        AI["AIService (Offline Heuristic / Cloud LLM)"]
-        ORCH --> POOL
-        ORCH --> QUEUE
-        ORCH --> AI
+    subgraph Swarm ["Python Multi-Agent Swarm Layer"]
+        MO["Main Orchestrator (MainAgent)"]
+        WE["WorkflowExecutor (DAG Scheduler)"]
+        RA["Research Specialist (Literature & Citations)"]
+        AA["Analysis Specialist (Research Gaps)"]
+        WA["Technical Writer (Structured Prose)"]
+        DA["Data & Metrics Analyst (Quantitative Benchmarks)"]
+        QA["Quality Reviewer (Verification Gate)"]
+
+        MO --> WE
+        WE --> RA
+        WE --> AA
+        WE --> WA
+        WE --> DA
+        WE --> QA
     end
 
-    subgraph DAO ["DAO Layer (Data Access Objects)"]
-        PDAO["ProjectDao"]
-        TDAO["TaskDao"]
-        ADAO["AgentDao"]
-        KDAO["KnowledgeDao"]
-        DDAO["DocumentDao"]
-    end
-
-    subgraph Persistence ["Persistence Layer (JDBC)"]
-        CF["DatabaseConnectionFactory (db.properties)"]
-        TM["TransactionManager (commit/rollback)"]
-        DB[("MySQL Database: pharoah_db")]
+    subgraph Persistence ["Persistence Layer (JDBC & MySQL)"]
+        UDAO["UserActivityDAO (Activity Persistence)"]
+        CF["DatabaseConnectionFactory (db.properties / ENV)"]
+        DB[("MySQL Database: pharoah_db.user_activity")]
+        
+        UDAO --> CF
         CF --> DB
-        TM --> DB
     end
 
-    Presentation --> Service
-    Service --> Core
-    Service --> DAO
-    Core --> DAO
-    DAO --> Persistence
+    Presentation --> Bridge
+    Bridge --> Swarm
+    Presentation --> Persistence
 ```
 
 ---
 
-## 2. Relational Database Schema (MySQL 8.0)
+## 2. The 5-Step Format-Driven Pipeline
 
-```mermaid
-erDiagram
-    PROJECTS ||--o{ TASKS : contains
-    PROJECTS ||--o{ DOCUMENTS : owns
-    PROJECTS ||--o{ KNOWLEDGE_RESOURCES : stores
-    AGENTS ||--o{ TASKS : assigned_to
-    DOCUMENTS ||--o{ DOCUMENT_SECTIONS : composed_of
-    AGENTS ||--o{ DOCUMENT_SECTIONS : drafts
+1. **Step 1: Format Resolution**: Identifies document requirements (e.g., IEEE Research Paper, Tech Docs, Blog).
+2. **Step 2: Topic Scoping**: Registers active topic context.
+3. **Step 3: Section Decomposition**: Displays ordered section graph; user selects single, multiple, or all sections.
+4. **Step 4: Priority Scheduling**: Weighted priority queue (`HIGH`, `MEDIUM`, `LOW`) resolves dependency order (e.g., Literature Review before Research Gap).
+5. **Step 5: Agent Swarm Execution & Review**:
+   - Dispatches tasks to specialized agents.
+   - Live streaming displays `[WAITING]`, `[RUNNING]`, thinking indicators, word count statistics.
+   - Quality Reviewer evaluates outputs against quality thresholds (e.g. 94/100).
+   - Generates consolidated markdown artifact in `outputs/`.
+   - Records persistent audit row in MySQL table `user_activity`.
 
-    PROJECTS {
-        VARCHAR project_id PK
-        VARCHAR name UK
-        TEXT description
-        VARCHAR status
-        TIMESTAMP created_at
-    }
+---
 
-    AGENTS {
-        VARCHAR agent_id PK
-        VARCHAR name UK
-        VARCHAR role
-        TEXT instructions
-        VARCHAR provider_type
-        BOOLEAN is_active
-        TIMESTAMP created_at
-    }
+## 3. Database Schema: `user_activity`
 
-    TASKS {
-        VARCHAR task_id PK
-        VARCHAR project_id FK
-        VARCHAR title
-        VARCHAR task_type
-        VARCHAR priority
-        VARCHAR status
-        TEXT input_payload
-        VARCHAR assigned_agent_id FK
-        VARCHAR depends_on_task_id FK
-        MEDIUMTEXT final_output
-        TEXT review_notes
-        TIMESTAMP created_at
-        TIMESTAMP completed_at
-    }
+The simplified database audit table allows immediate evaluation in **MySQL Workbench**:
 
-    DOCUMENTS {
-        VARCHAR document_id PK
-        VARCHAR project_id FK
-        VARCHAR title
-        VARCHAR document_type
-        VARCHAR status
-        TIMESTAMP created_at
-    }
-
-    DOCUMENT_SECTIONS {
-        VARCHAR section_id PK
-        VARCHAR document_id FK
-        VARCHAR section_name
-        INT section_order
-        VARCHAR assigned_agent_id FK
-        MEDIUMTEXT content
-        VARCHAR status
-        INT version
-        TIMESTAMP updated_at
-    }
-
-    KNOWLEDGE_RESOURCES {
-        VARCHAR resource_id PK
-        VARCHAR project_id FK
-        VARCHAR title
-        VARCHAR resource_type
-        MEDIUMTEXT content_or_url
-        VARCHAR topic_tag
-        TIMESTAMP created_at
-    }
-
-    WORKFLOW_LOGS {
-        VARCHAR log_id PK
-        VARCHAR task_id FK
-        VARCHAR agent_id FK
-        VARCHAR action
-        TEXT details
-        TIMESTAMP created_at
-    }
+```sql
+CREATE TABLE IF NOT EXISTS user_activity (
+    activity_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_name VARCHAR(100) NOT NULL,
+    topic VARCHAR(255) NOT NULL,
+    workflow_type VARCHAR(100) NOT NULL,
+    sections_worked TEXT NOT NULL,
+    agents_used TEXT NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'COMPLETED',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
 ```
 
 ---
 
-## 3. Multi-Agent Orchestration Flow
+## 4. Team Responsibilities
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as Student / Evaluator
-    participant CLI as PharoahCLI (Terminal)
-    participant Orch as TaskOrchestrator
-    participant Pool as ThreadPoolManager
-    participant Agent as Specialized Agent
-    participant AI as AIService (Mock / Gemini)
-    participant DAO as TaskDao (MySQL)
-
-    User->>CLI: Submit Objective ("Decompose Research Goal")
-    CLI->>Orch: decomposeObjective(projectId, title, topic)
-    Orch->>DAO: Insert subtasks (Literature Review, Analysis, Report, Review)
-    Orch-->>CLI: Display 4 subtasks with dependency graph
-
-    User->>CLI: Execute Task ("Literature Review")
-    CLI->>Orch: submitTaskAsync(task)
-    Orch->>Orch: Check Prerequisite Dependencies (None for task 1)
-    Orch->>Pool: Submit Callable to Worker Thread
-    Pool->>Agent: executeIntelligence(task, agentInstructions)
-    Agent->>AI: synthesizeResearch(prompt, context)
-    AI-->>Agent: Synthesized findings & research gaps
-    Agent-->>Pool: TaskResult(output, latencyMs, agentName)
-    Pool->>DAO: Update Task (status = UNDER_REVIEW)
-    Pool-->>CLI: Display output on Terminal Screen
-
-    User->>CLI: Inspect Output & Enter Feedback
-    CLI->>DAO: recordReviewApproval(taskId, approved=true, reviewNotes)
-    DAO-->>User: Status updated to COMPLETED (Approved by Human)
-```
-
----
-
-## 4. Document Workflow Engine
-
-1. **Template Generation:** When a user creates an *Academic Research Paper*, *Technical Blog*, *Technical Documentation*, or *Business Proposal*, `DocumentWorkflowService` automatically creates the corresponding standard sections.
-2. **Independent Section Drafting:** Individual sections are assigned to specialized agents (e.g. `Abstract` to `WRITING_AGENT`, `Methodology` to `RESEARCH_AGENT`, `Architecture` to `DOCUMENTATION_AGENT`).
-3. **Section-Level Review & Versioning:** Each section maintains an independent `version` counter and status (`PENDING` $\to$ `DRAFTED` $\to$ `UNDER_REVIEW` $\to$ `APPROVED`).
-4. **Final Compilation:** Calling `compileDocument()` reads all approved sections in their defined `section_order` and concatenates them into a unified Markdown document.
+- **VARIJ CHAUHAN**: Architecture, Java CLI, ProcessBuilder Subprocess Bridge, Concurrency & Stream Analytics.
+- **ASHUTOSH**: Python Multi-Agent Swarm, BaseAgent, Specialized Swarm Agents, Format Workflows, Execution Engine.
+- **SANCHIT**: Database Persistence, JDBC Connection Pooling, MySQL Schema, UserActivity DAO, Knowledge Management.

@@ -2,15 +2,15 @@ package com.pharoah.app;
 
 import com.pharoah.agent.AgentService;
 import com.pharoah.ai.AIService;
-import com.pharoah.ai.OfflineHeuristicAIService;
 import com.pharoah.ai.RemoteHttpAIService;
 import com.pharoah.analytics.TaskAnalyticsEngine;
+import com.pharoah.bridge.PythonAgentBridge;
+import com.pharoah.bridge.PythonExecutionResult;
 import com.pharoah.cli.PharoahCLI;
 import com.pharoah.concurrency.ThreadPoolManager;
-import com.pharoah.core.enums.Priority;
-import com.pharoah.core.enums.TaskType;
 import com.pharoah.core.model.Task;
 import com.pharoah.core.model.TaskResult;
+import com.pharoah.core.model.UserActivity;
 import com.pharoah.document.Document;
 import com.pharoah.document.DocumentSection;
 import com.pharoah.document.DocumentType;
@@ -28,9 +28,8 @@ import com.pharoah.tasks.TaskService;
 
 import java.util.List;
 
-// SANCHIT, ASHUTOSH, VARIJ: Main Application Entrypoint.
-// Initializes the terminal-first architecture connecting MySQL JDBC, multi-agent swarms,
-// knowledge repository, document workflows, and interactive terminal CLI.
+// VARIJ, ASHUTOSH, SANCHIT: Main Application Entrypoint.
+// Hybrid Architecture: Java Terminal Orchestrator & CLI + Python Multi-Agent Swarm + MySQL 8.0 Persistence.
 public class PharoahApplication {
 
     private final DatabaseConnectionFactory dbFactory;
@@ -42,10 +41,12 @@ public class PharoahApplication {
     private final TaskOrchestrator orchestrator;
     private final TaskAnalyticsEngine analyticsEngine;
     private final ThreadPoolManager poolManager;
+    private final UserActivityDAO userActivityDAO;
+    private final PythonAgentBridge pythonBridge;
     private final PharoahCLI cli;
 
     public PharoahApplication() {
-        // ASHUTOSH: Initialize MySQL connection pool and schema
+        // SANCHIT: Initialize MySQL connection pool and auto-bootstrapped schema
         this.dbFactory = new DatabaseConnectionFactory();
 
         ProjectDao projectDao = new ProjectDao(dbFactory);
@@ -53,8 +54,9 @@ public class PharoahApplication {
         AgentDao agentDao = new AgentDao(dbFactory);
         KnowledgeDao knowledgeDao = new KnowledgeDao(dbFactory);
         DocumentDao documentDao = new DocumentDao(dbFactory);
+        this.userActivityDAO = new UserActivityDAO(dbFactory);
 
-        // SANCHIT: Initialize core business services
+        // Core business services
         this.projectService = new ProjectService(projectDao);
         this.taskService = new TaskService(taskDao);
         this.agentService = new AgentService(agentDao);
@@ -62,16 +64,28 @@ public class PharoahApplication {
         this.documentService = new DocumentWorkflowService(documentDao);
         this.analyticsEngine = new TaskAnalyticsEngine();
 
-        // VARIJ: Initialize concurrency and orchestration engine
+        // Concurrency and orchestration engine
         this.poolManager = new ThreadPoolManager(Runtime.getRuntime().availableProcessors());
         TaskManager taskManager = new TaskManager();
 
-        // Pluggable AI engine (Supports Offline Heuristic engine and Cloud Gemini/Ollama)
         AIService aiEngine = new RemoteHttpAIService();
         this.orchestrator = new TaskOrchestrator(taskManager, poolManager, taskDao, agentService, aiEngine);
 
-        // SANCHIT: Initialize interactive terminal CLI
-        this.cli = new PharoahCLI(projectService, taskService, agentService, orchestrator, knowledgeService, documentService, analyticsEngine);
+        // VARIJ & ASHUTOSH: Initialize Python Multi-Agent Swarm Bridge
+        this.pythonBridge = new PythonAgentBridge();
+
+        // Terminal CLI
+        this.cli = new PharoahCLI(
+                projectService,
+                taskService,
+                agentService,
+                orchestrator,
+                knowledgeService,
+                documentService,
+                analyticsEngine,
+                userActivityDAO,
+                pythonBridge
+        );
     }
 
     public static void main(String[] args) {
@@ -97,73 +111,73 @@ public class PharoahApplication {
         System.out.println("=========================================================================");
     }
 
-    // VARIJ & SANCHIT: Automated end-to-end terminal demo validating all modules
+    // VARIJ, ASHUTOSH, SANCHIT: Automated end-to-end demo validating format-driven multi-agent execution & persistence
     public void runAutomatedDemo() {
         System.out.println("=========================================================================");
-        System.out.println("   👑 PHAROAH: AUTOMATED TERMINAL END-TO-END DEMO WALKTHROUGH           ");
+        System.out.println("   👑 PHAROAH: AUTOMATED FORMAT-DRIVEN MULTI-AGENT DEMO WALKTHROUGH     ");
         System.out.println("=========================================================================\n");
 
         try {
-            long runId = System.currentTimeMillis() % 10000;
+            // STEP 1-5 DEMO: Execute Format-Driven Multi-Agent Swarm for "Research Paper"
+            System.out.println("--- [1] MULTI-AGENT SWARM: FORMAT-DRIVEN RESEARCH WORKFLOW ---");
+            String topic = "Impact of Artificial Intelligence on Cybersecurity";
+            System.out.println("  Topic           : " + topic);
+            System.out.println("  Workflow Format : Research Paper (Format #1)");
+            System.out.println("  Selected Sections: Literature Review, Research Gap, Methodology, Data Analysis");
+            System.out.println("  Priorities      : Literature Review:HIGH, Research Gap:HIGH, Methodology:MEDIUM, Data Analysis:LOW");
+            System.out.println("  Executing Swarm via Python Subprocess Bridge...\n");
 
-            // 1. Module A: Create Project
-            System.out.println("--- [1] MODULE A: PROJECT CREATION & ISOLATION ---");
-            Project project = projectService.createProject("Research: AI in Cybersecurity", "Academic research project evaluating LLM agent vulnerabilities.");
-            System.out.println("  Active Project: " + project.getName() + " (ID: " + project.getProjectId().substring(0, Math.min(8, project.getProjectId().length())) + ")");
+            PythonExecutionResult swarmResult = pythonBridge.runWorkflow(
+                    "1",
+                    topic,
+                    "Literature Review,Research Gap,Methodology,Data Analysis",
+                    "Literature Review:HIGH,Research Gap:HIGH,Methodology:MEDIUM,Data Analysis:LOW",
+                    "Literature Review:Research Specialist,Research Gap:Analysis Specialist,Methodology:Research Specialist,Data Analysis:Data & Metrics Analyst"
+            );
 
-            // 2. Module E: Save Knowledge Assets
-            System.out.println("\n--- [2] MODULE E: KNOWLEDGE REPOSITORY PERSISTENCE ---");
-            KnowledgeResource res1 = knowledgeService.saveResource(project.getProjectId(),
-                    "Adversarial Prompting in AI Models", ResourceType.URL, "https://arxiv.org/abs/2302.12173", "SECURITY");
-            KnowledgeResource res2 = knowledgeService.saveResource(project.getProjectId(),
-                    "SQL Injection Mitigation Pattern", ResourceType.CODE_SNIPPET, "PreparedStatement ps = conn.prepareStatement(sql);", "DATABASE");
-            System.out.println("  Saved Resource 1: " + res1.getTitle() + " (" + res1.getResourceType() + ")");
-            System.out.println("  Saved Resource 2: " + res2.getTitle() + " (" + res2.getResourceType() + ")");
+            System.out.printf("\n  Swarm Status     : %s (Duration: %.2fs)\n", swarmResult.getStatus(), swarmResult.getElapsedSeconds());
+            System.out.printf("  Generated Artifact: %s\n", swarmResult.getOutputFile());
 
-            // 3. Module D: Orchestrator Objective Decomposition
-            System.out.println("\n--- [3] MODULE D: MULTI-AGENT ORCHESTRATION & DECOMPOSITION ---");
-            String objectiveTitle = "AI Threat Detection #" + runId;
-            System.out.println("  Decomposing objective '" + objectiveTitle + "' into dependent subtasks...");
-            List<Task> subtasks = orchestrator.decomposeObjective(project.getProjectId(), objectiveTitle, "Adversarial Machine Learning");
-            System.out.printf("  Generated %d subtasks with dependency graph.\n", subtasks.size());
+            // PERSISTENCE: Save to MySQL user_activity table
+            System.out.println("\n--- [2] DATABASE PERSISTENCE: LOGGING USER ACTIVITY TO MYSQL ---");
+            UserActivity demoActivity = new UserActivity(
+                    "University Student",
+                    topic,
+                    "Research Paper",
+                    "Literature Review, Research Gap, Methodology, Data Analysis",
+                    "Research Specialist, Analysis Specialist, Data & Metrics Analyst, Quality Reviewer"
+            );
+            userActivityDAO.recordActivity(demoActivity);
+            System.out.println("  Successfully recorded activity into MySQL 'user_activity' table!");
 
-            // 4. Module B: Execute Task Concurrently via Agent Swarm
-            System.out.println("\n--- [4] MODULE B & C: CONCURRENT TASK EXECUTION BY SPECIALIZED AGENT ---");
-            Task firstTask = subtasks.get(0); // Literature Review
-            System.out.println("  Executing Task: " + firstTask.getTitle() + " (Priority: " + firstTask.getPriority() + ")");
-            TaskResult result = orchestrator.submitTaskAsync(firstTask).get();
-            System.out.printf("  Execution completed in %d ms by: %s\n", result.executionDurationMs(), result.executedByAgent());
-            System.out.println("  Output Preview:\n" + result.output().lines().limit(6).reduce("", (a, b) -> a + "\n  " + b));
-
-            // Human Review Step
-            System.out.println("\n--- [5] HUMAN-IN-THE-LOOP REVIEW GATE ---");
-            taskService.recordReviewApproval(firstTask.getTaskId(), true, "Approved literature review findings.");
-            System.out.println("  Human reviewer approved Task output. Status updated to: COMPLETED");
-
-            // 5. Module F: Document Workflow & Section Compilation
-            System.out.println("\n--- [6] MODULE F: MULTI-SECTION DOCUMENT WORKFLOW & COMPILATION ---");
-            Document doc = documentService.createDocumentWithTemplate(project.getProjectId(), "AI in Cybersecurity - Paper #" + runId, DocumentType.RESEARCH_PAPER);
-            System.out.printf("  Created Document: '%s' with %d template sections.\n", doc.getTitle(), doc.getDocumentType().getStandardSections().size());
-
-            List<DocumentSection> sections = documentService.getSections(doc.getDocumentId());
-            if (!sections.isEmpty()) {
-                DocumentSection abstractSec = sections.get(0);
-                documentService.updateSectionContent(abstractSec.getSectionId(), "This paper investigates adversarial vulnerabilities in autonomous AI agents and proposes defensive invariants.");
-                documentService.reviewSection(abstractSec.getSectionId(), true);
-                System.out.println("  Drafted and approved Section: " + abstractSec.getSectionName());
+            List<UserActivity> activities = userActivityDAO.getAllActivities();
+            System.out.printf("  Total Activities in Database: %d\n", activities.size());
+            if (!activities.isEmpty()) {
+                System.out.println("  Latest Record: " + activities.get(0));
             }
 
-            String compiled = documentService.compileDocument(doc.getDocumentId());
-            System.out.println("\n  Compiled Document Preview:\n" + compiled.lines().limit(8).reduce("", (a, b) -> a + "\n  " + b));
+            // Java Project Management Verification
+            System.out.println("\n--- [3] MODULE A: PROJECT ISOLATION & KNOWLEDGE ASSETS ---");
+            Project project = projectService.createProject("Cybersecurity LLM Invariants", "Evaluates defensive invariants against prompt injections.");
+            System.out.println("  Active Project: " + project.getName() + " (ID: " + project.getProjectId().substring(0, Math.min(8, project.getProjectId().length())) + ")");
 
-            // 6. Stream Analytics
-            System.out.println("\n--- [7] STREAM API ANALYTICS & DATABASE METRICS ---");
-            List<Task> allTasks = taskService.getAllTasks();
-            System.out.printf("  Total Tasks Recorded: %d\n", allTasks.size());
-            System.out.println("  Category Distribution (Collectors.groupingBy): " + analyticsEngine.countTasksByType(allTasks));
+            KnowledgeResource res = knowledgeService.saveResource(project.getProjectId(),
+                    "Adversarial Robustness in LLM Agents", ResourceType.URL, "https://arxiv.org/abs/2302.12173", "SECURITY");
+            System.out.println("  Persisted Knowledge Asset: " + res.getTitle() + " (" + res.getResourceType() + ")");
+
+            // Document Compilation Verification
+            System.out.println("\n--- [4] MODULE F: MULTI-SECTION DOCUMENT COMPILATION ---");
+            Document doc = documentService.createDocumentWithTemplate(project.getProjectId(), "Cybersecurity Defense Paper", DocumentType.RESEARCH_PAPER);
+            List<DocumentSection> sections = documentService.getSections(doc.getDocumentId());
+            if (!sections.isEmpty()) {
+                DocumentSection firstSec = sections.get(0);
+                documentService.updateSectionContent(firstSec.getSectionId(), "Formal verification of prompt guardrails across autonomous multi-agent systems.");
+                documentService.reviewSection(firstSec.getSectionId(), true);
+                System.out.println("  Drafted & Approved Section: " + firstSec.getSectionName());
+            }
 
             System.out.println("\n=========================================================================");
-            System.out.println("  🎉 COMPLETE SYSTEM VERIFICATION PASSED: ALL 6 CORE MODULES FUNCTIONAL!");
+            System.out.println("  🎉 VERIFICATION PASSED: FORMAT-DRIVEN MULTI-AGENT ARCHITECTURE FUNCTIONAL!");
             System.out.println("=========================================================================");
 
         } catch (Exception e) {

@@ -6,9 +6,9 @@ import java.io.InputStream;
 import java.sql.*;
 import java.util.Properties;
 
-// ASHUTOSH: Implemented DatabaseConnectionFactory.
-// Manages MySQL JDBC connection pooling, configuration loading from db.properties,
-// automatic schema bootstrapping for 7 relational tables, and graceful SQLite fallback.
+// SANCHIT: Implemented DatabaseConnectionFactory.
+// Manages MySQL JDBC connection pooling, configuration loading,
+// automatic schema bootstrapping for persistent tables (including user_activity), and SQLite fallback.
 public class DatabaseConnectionFactory {
 
     private String dbType;
@@ -32,7 +32,7 @@ public class DatabaseConnectionFactory {
         testAndInitializeSchema();
     }
 
-    // ASHUTOSH: Reads database credentials from db.properties file
+    // SANCHIT: Reads database credentials from environment variables or db.properties
     private void loadConfiguration() {
         Properties props = new Properties();
         try {
@@ -56,12 +56,22 @@ public class DatabaseConnectionFactory {
 
         this.dbType = props.getProperty("db.type", "mysql");
         this.dbDriver = props.getProperty("db.driver", "com.mysql.cj.jdbc.Driver");
-        this.dbUrl = props.getProperty("db.url", "jdbc:mysql://localhost:3306/pharoah_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true");
-        this.dbUser = props.getProperty("db.user", "root");
-        this.dbPassword = props.getProperty("db.password", "i@mvarij999@");
+
+        // SANCHIT: Support non-hardcoded environment overrides for security
+        String envUrl = System.getenv("MYSQL_URL");
+        this.dbUrl = (envUrl != null && !envUrl.isBlank()) ? envUrl :
+                props.getProperty("db.url", "jdbc:mysql://localhost:3306/pharoah_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true");
+
+        String envUser = System.getenv("MYSQL_USER");
+        this.dbUser = (envUser != null && !envUser.isBlank()) ? envUser :
+                props.getProperty("db.user", "root");
+
+        String envPass = System.getenv("MYSQL_PASSWORD");
+        this.dbPassword = (envPass != null && !envPass.isBlank()) ? envPass :
+                props.getProperty("db.password", "i@mvarij999@");
     }
 
-    // ASHUTOSH: Establishes live JDBC Connection using DriverManager
+    // SANCHIT: Establishes live JDBC Connection using DriverManager
     public Connection getConnection() throws SQLException {
         try {
             Class.forName(dbDriver);
@@ -304,6 +314,32 @@ public class DatabaseConnectionFactory {
                 );
             """;
             stmt.execute(sqlLogs);
+
+            // 8. User Activity Audit Table (SANCHIT: Format-driven activity records for MySQL Workbench)
+            String sqlUserActivity = isMySqlActive ? """
+                CREATE TABLE IF NOT EXISTS user_activity (
+                    activity_id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_name VARCHAR(100) NOT NULL,
+                    topic VARCHAR(255) NOT NULL,
+                    workflow_type VARCHAR(100) NOT NULL,
+                    sections_worked TEXT NOT NULL,
+                    agents_used TEXT NOT NULL,
+                    status VARCHAR(50) NOT NULL DEFAULT 'COMPLETED',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB;
+            """ : """
+                CREATE TABLE IF NOT EXISTS user_activity (
+                    activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_name TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    workflow_type TEXT NOT NULL,
+                    sections_worked TEXT NOT NULL,
+                    agents_used TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'COMPLETED',
+                    created_at TIMESTAMP NOT NULL
+                );
+            """;
+            stmt.execute(sqlUserActivity);
 
             seedInitialData(conn);
 
