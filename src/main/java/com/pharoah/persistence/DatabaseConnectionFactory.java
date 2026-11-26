@@ -1,13 +1,11 @@
 package com.pharoah.persistence;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.InputStream;
+import com.pharoah.config.AppConfig;
+
 import java.sql.*;
-import java.util.Properties;
 
 // SANCHIT: Implemented DatabaseConnectionFactory.
-// Manages MySQL JDBC connection pooling, configuration loading,
+// Manages MySQL JDBC connection pooling, configuration loading via AppConfig,
 // automatic schema bootstrapping for persistent tables (including user_activity), and SQLite fallback.
 public class DatabaseConnectionFactory {
 
@@ -24,51 +22,23 @@ public class DatabaseConnectionFactory {
     }
 
     public DatabaseConnectionFactory(String customDbUrl) {
+        AppConfig config = AppConfig.getInstance();
         this.dbUrl = customDbUrl;
         this.dbType = customDbUrl.contains("mysql") ? "mysql" : "sqlite";
         this.dbDriver = this.dbType.equals("mysql") ? "com.mysql.cj.jdbc.Driver" : "org.sqlite.JDBC";
-        this.dbUser = "root";
-        this.dbPassword = "";
+        this.dbUser = config.getDbUser();
+        this.dbPassword = config.getDbPassword();
         testAndInitializeSchema();
     }
 
-    // SANCHIT: Reads database credentials from environment variables or db.properties
+    // SANCHIT: Loads centralized configuration from AppConfig
     private void loadConfiguration() {
-        Properties props = new Properties();
-        try {
-            // First check local file on disk
-            File propFile = new File("db.properties");
-            if (propFile.exists()) {
-                try (InputStream is = new FileInputStream(propFile)) {
-                    props.load(is);
-                }
-            } else {
-                // Check classpath resource
-                try (InputStream is = getClass().getClassLoader().getResourceAsStream("db.properties")) {
-                    if (is != null) {
-                        props.load(is);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("[DB CONFIG WARN] Failed to load db.properties, applying defaults: " + e.getMessage());
-        }
-
-        this.dbType = props.getProperty("db.type", "mysql");
-        this.dbDriver = props.getProperty("db.driver", "com.mysql.cj.jdbc.Driver");
-
-        // SANCHIT: Support non-hardcoded environment overrides for security
-        String envUrl = System.getenv("MYSQL_URL");
-        this.dbUrl = (envUrl != null && !envUrl.isBlank()) ? envUrl :
-                props.getProperty("db.url", "jdbc:mysql://localhost:3306/pharoah_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true");
-
-        String envUser = System.getenv("MYSQL_USER");
-        this.dbUser = (envUser != null && !envUser.isBlank()) ? envUser :
-                props.getProperty("db.user", "root");
-
-        String envPass = System.getenv("MYSQL_PASSWORD");
-        this.dbPassword = (envPass != null && !envPass.isBlank()) ? envPass :
-                props.getProperty("db.password", "i@mvarij999@");
+        AppConfig config = AppConfig.getInstance();
+        this.dbType = config.getDbType();
+        this.dbDriver = config.getDbDriver();
+        this.dbUrl = config.getDbUrl();
+        this.dbUser = config.getDbUser();
+        this.dbPassword = config.getDbPassword();
     }
 
     // SANCHIT: Establishes live JDBC Connection using DriverManager
@@ -79,32 +49,39 @@ public class DatabaseConnectionFactory {
                 return DriverManager.getConnection(dbUrl, dbUser, dbPassword);
             } else {
                 // SQLite fallback
-                return DriverManager.getConnection("jdbc:sqlite:pharoah.db");
+                String targetUrl = (dbUrl != null && dbUrl.contains("sqlite")) ? dbUrl : AppConfig.getInstance().getDbFallbackSqlite();
+                return DriverManager.getConnection(targetUrl);
             }
         } catch (ClassNotFoundException e) {
             throw new SQLException("JDBC Driver class not found: " + dbDriver, e);
         }
     }
 
-    // ASHUTOSH: Verifies MySQL server connectivity; falls back to SQLite if offline
+    // SANCHIT: Verifies MySQL server connectivity; falls back to SQLite if offline
     private void testAndInitializeSchema() {
-        try {
-            Class.forName("com.mysql.cj.jdbc.Driver");
-            try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPassword)) {
-                this.isMySqlActive = true;
-                System.out.println("[DATABASE] Successfully connected to MySQL 8.0 on localhost:3306 (pharoah_db).");
+        if ("mysql".equalsIgnoreCase(this.dbType)) {
+            try {
+                Class.forName("com.mysql.cj.jdbc.Driver");
+                try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPassword)) {
+                    this.isMySqlActive = true;
+                    System.out.println("[DATABASE] Successfully connected to MySQL 8.0 on localhost:3306 (pharoah_db).");
+                }
+            } catch (Exception e) {
+                this.isMySqlActive = false;
+                this.dbType = "sqlite";
+                this.dbDriver = "org.sqlite.JDBC";
+                System.out.println("[DATABASE] MySQL connection failed (" + e.getMessage() + "). Falling back to SQLite (" + AppConfig.getInstance().getDbFallbackSqlite() + ").");
             }
-        } catch (Exception e) {
+        } else {
             this.isMySqlActive = false;
             this.dbType = "sqlite";
             this.dbDriver = "org.sqlite.JDBC";
-            System.out.println("[DATABASE] MySQL connection failed (" + e.getMessage() + "). Falling back to SQLite (pharoah.db).");
         }
 
         initializeAllTables();
     }
 
-    // ASHUTOSH: Creates all 7 relational tables with primary keys and foreign keys
+    // SANCHIT: Creates persistent relational tables with primary keys and foreign keys
     private void initializeAllTables() {
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement()) {
@@ -221,8 +198,7 @@ public class DatabaseConnectionFactory {
                     title VARCHAR(255) NOT NULL,
                     document_type VARCHAR(50) NOT NULL,
                     status VARCHAR(30) NOT NULL DEFAULT 'DRAFT',
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB;
             """ : """
                 CREATE TABLE IF NOT EXISTS documents (
@@ -348,42 +324,44 @@ public class DatabaseConnectionFactory {
         }
     }
 
-    // ASHUTOSH: Populates initial sample project, knowledge assets, and 7 swarm agents
+    // SANCHIT: Populates initial sample project, knowledge assets, and 7 swarm agents
     private void seedInitialData(Connection conn) {
         try (Statement stmt = conn.createStatement()) {
-            // Seed Default Project
-            stmt.executeUpdate("""
-                INSERT IGNORE INTO projects (project_id, name, description, status, created_at)
-                VALUES ('proj-default-01', 'Core Engineering & Research', 'Primary workspace for multi-agent tasks, academic research, and system engineering.', 'ACTIVE', NOW());
-            """);
+            if (isMySqlActive) {
+                // Seed Default Project
+                stmt.executeUpdate("""
+                    INSERT IGNORE INTO projects (project_id, name, description, status, created_at)
+                    VALUES ('proj-default-01', 'Core Engineering & Research', 'Primary workspace for multi-agent tasks, academic research, and system engineering.', 'ACTIVE', NOW());
+                """);
 
-            // Seed Default Agents (All 7 Roles)
-            String[][] defaultAgents = {
-                {"agent-01", "Research Specialist", "RESEARCH_AGENT", "Investigate literature, academic findings, and cite relevant sources.", "MOCK_HEURISTIC"},
-                {"agent-02", "Technical Writer", "WRITING_AGENT", "Draft polished prose, technical blogs, and formal reports.", "MOCK_HEURISTIC"},
-                {"agent-03", "Data & Metrics Analyst", "ANALYSIS_AGENT", "Analyze empirical data, identify patterns, and compare paradigms.", "MOCK_HEURISTIC"},
-                {"agent-04", "Software Engineer", "CODING_AGENT", "Review algorithms, explain code patterns, and draft implementations.", "MOCK_HEURISTIC"},
-                {"agent-05", "Docs Architect", "DOCUMENTATION_AGENT", "Generate system specs, installation guides, and API documentation.", "MOCK_HEURISTIC"},
-                {"agent-06", "Quality Reviewer", "REVIEWER_AGENT", "Verify facts, check claims, and assess accuracy of written sections.", "MOCK_HEURISTIC"},
-                {"agent-07", "Project Planner", "PLANNING_AGENT", "Decompose goals into milestone roadmaps and dependent task graphs.", "MOCK_HEURISTIC"}
-            };
+                // Seed Default Agents (All 7 Roles)
+                String[][] defaultAgents = {
+                    {"agent-01", "Research Specialist", "RESEARCH_AGENT", "Investigate literature, academic findings, and cite relevant sources.", "MOCK_HEURISTIC"},
+                    {"agent-02", "Technical Writer", "WRITING_AGENT", "Draft polished prose, technical blogs, and formal reports.", "MOCK_HEURISTIC"},
+                    {"agent-03", "Data & Metrics Analyst", "ANALYSIS_AGENT", "Analyze empirical data, identify patterns, and compare paradigms.", "MOCK_HEURISTIC"},
+                    {"agent-04", "Software Engineer", "CODING_AGENT", "Review algorithms, explain code patterns, and draft implementations.", "MOCK_HEURISTIC"},
+                    {"agent-05", "Docs Architect", "DOCUMENTATION_AGENT", "Generate system specs, installation guides, and API documentation.", "MOCK_HEURISTIC"},
+                    {"agent-06", "Quality Reviewer", "REVIEWER_AGENT", "Verify facts, check claims, and assess accuracy of written sections.", "MOCK_HEURISTIC"},
+                    {"agent-07", "Project Planner", "PLANNING_AGENT", "Decompose goals into milestone roadmaps and dependent task graphs.", "MOCK_HEURISTIC"}
+                };
 
-            for (String[] a : defaultAgents) {
-                String sql = String.format("""
-                    INSERT IGNORE INTO agents (agent_id, name, role, instructions, provider_type, is_active, created_at)
-                    VALUES ('%s', '%s', '%s', '%s', '%s', 1, NOW());
-                """, a[0], a[1], a[2], a[3], a[4]);
-                stmt.executeUpdate(sql);
+                for (String[] a : defaultAgents) {
+                    String sql = String.format("""
+                        INSERT IGNORE INTO agents (agent_id, name, role, instructions, provider_type, is_active, created_at)
+                        VALUES ('%s', '%s', '%s', '%s', '%s', 1, NOW());
+                    """, a[0], a[1], a[2], a[3], a[4]);
+                    stmt.executeUpdate(sql);
+                }
+
+                // Seed Sample Knowledge Asset
+                stmt.executeUpdate("""
+                    INSERT IGNORE INTO knowledge_resources (resource_id, project_id, title, resource_type, content_or_url, topic_tag, created_at)
+                    VALUES ('res-01', 'proj-default-01', 'Java 21 LTS Specifications', 'URL', 'https://openjdk.org/projects/jdk/21/', 'JAVA', NOW());
+                """);
             }
 
-            // Seed Sample Knowledge Asset
-            stmt.executeUpdate("""
-                INSERT IGNORE INTO knowledge_resources (resource_id, project_id, title, resource_type, content_or_url, topic_tag, created_at)
-                VALUES ('res-01', 'proj-default-01', 'Java 21 LTS Specifications', 'URL', 'https://openjdk.org/projects/jdk/21/', 'JAVA', NOW());
-            """);
-
         } catch (SQLException e) {
-            // For SQLite fallback (NOW() and INSERT IGNORE syntax differs), ignore seed failures on startup
+            // Ignore seed duplicate failures on startup
         }
     }
 
@@ -395,7 +373,7 @@ public class DatabaseConnectionFactory {
         return dbType;
     }
 
-    // ASHUTOSH: Prints live metadata about the connected database engine
+    // SANCHIT: Prints live metadata about the connected database engine
     public void printDatabaseMetaData() {
         try (Connection conn = getConnection()) {
             DatabaseMetaData metaData = conn.getMetaData();

@@ -1,12 +1,15 @@
 package com.pharoah.bridge;
 
+import com.pharoah.config.AppConfig;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 // VARIJ: Implemented PythonAgentBridge.
 // Bridges the Java application and terminal interface with the Python Multi-Agent Swarm.
@@ -18,7 +21,12 @@ public class PythonAgentBridge {
 
     public PythonAgentBridge() {
         this.workingDirectory = new File(".").getAbsoluteFile();
-        this.pythonExecutable = detectPythonExecutable();
+        String configured = AppConfig.getInstance().getPythonCommand();
+        if (configured != null && !configured.isBlank() && !configured.equalsIgnoreCase("python")) {
+            this.pythonExecutable = configured;
+        } else {
+            this.pythonExecutable = detectPythonExecutable();
+        }
     }
 
     public PythonAgentBridge(String customPythonPath) {
@@ -36,8 +44,7 @@ public class PythonAgentBridge {
                 if (code == 0) {
                     return c;
                 }
-            } catch (Exception ignored) {
-            }
+            } catch (Exception ignored) {}
         }
         return "python";
     }
@@ -69,7 +76,6 @@ public class PythonAgentBridge {
             command.add(agents);
         }
 
-        List<String> outputLines = new ArrayList<>();
         StringBuilder jsonBuilder = new StringBuilder();
         boolean capturingJson = false;
 
@@ -95,23 +101,22 @@ public class PythonAgentBridge {
                     if (capturingJson) {
                         jsonBuilder.append(line);
                     } else {
-                        // Stream output to terminal in real time
+                        // Stream live output to terminal
                         System.out.println(line);
-                        outputLines.add(line);
                     }
                 }
             }
 
             int exitCode = process.waitFor();
             if (exitCode != 0) {
-                System.err.println("[BRIDGE WARN] Python agent swarm process exited with code: " + exitCode);
+                System.err.println("  [!] Swarm process finished with non-zero exit code: " + exitCode);
                 return new PythonExecutionResult(false, "FAILED", topic, workflow, List.of(), List.of(), "", 0.0);
             }
 
             return parseJsonResult(jsonBuilder.toString(), topic, workflow);
 
         } catch (Exception e) {
-            System.err.println("[BRIDGE ERROR] Failed to execute Python agent swarm: " + e.getMessage());
+            System.err.println("  [!] Failed to execute Python agent swarm: " + e.getMessage());
             return new PythonExecutionResult(false, "ERROR", topic, workflow, List.of(), List.of(), "", 0.0);
         }
     }
@@ -124,20 +129,19 @@ public class PythonAgentBridge {
         }
 
         try {
-            // Simple robust key extraction without heavy external JSON dependency
-            String status = extractField(rawJson, "status", "COMPLETED");
-            String topic = extractField(rawJson, "topic", fallbackTopic);
-            String workflow = extractField(rawJson, "workflow", fallbackWorkflow);
-            String outputFile = extractField(rawJson, "output_file", "");
+            String status = extractRegex(rawJson, "\"status\"\\s*:\\s*\"([^\"]+)\"", "COMPLETED");
+            String topic = extractRegex(rawJson, "\"topic\"\\s*:\\s*\"([^\"]+)\"", fallbackTopic);
+            String workflow = extractRegex(rawJson, "\"workflow\"\\s*:\\s*\"([^\"]+)\"", fallbackWorkflow);
+            String outputFile = extractRegex(rawJson, "\"output_file\"\\s*:\\s*\"([^\"]+)\"", "");
+            String elapsedStr = extractRegex(rawJson, "\"elapsed_seconds\"\\s*:\\s*([0-9.]+)", "0.0");
 
             double elapsed = 0.0;
-            String elapsedStr = extractField(rawJson, "elapsed_seconds", "0.0");
             try {
                 elapsed = Double.parseDouble(elapsedStr);
             } catch (Exception ignored) {}
 
-            List<String> sections = extractList(rawJson, "sections");
-            List<String> agents = extractList(rawJson, "agents");
+            List<String> sections = extractArrayRegex(rawJson, "sections");
+            List<String> agents = extractArrayRegex(rawJson, "agents");
 
             return new PythonExecutionResult(true, status, topic, workflow, sections, agents, outputFile, elapsed);
         } catch (Exception e) {
@@ -146,41 +150,23 @@ public class PythonAgentBridge {
         }
     }
 
-    private String extractField(String json, String field, String defaultValue) {
-        String pattern = "\"" + field + "\":";
-        int idx = json.indexOf(pattern);
-        if (idx == -1) return defaultValue;
-        int start = idx + pattern.length();
-        while (start < json.length() && (json.charAt(start) == ' ' || json.charAt(start) == '"')) {
-            start++;
+    private String extractRegex(String json, String regex, String defaultValue) {
+        Matcher m = Pattern.compile(regex).matcher(json);
+        if (m.find()) {
+            return m.group(1).replace("\\\\", "\\");
         }
-        int end = start;
-        char endChar = (json.charAt(idx + pattern.length()) == ' ' && json.indexOf('"', start - 1) == start - 1) ? '"' : ',';
-        if (json.charAt(start - 1) == '"') {
-            end = json.indexOf('"', start);
-        } else {
-            end = json.indexOf(',', start);
-            if (end == -1) end = json.indexOf('}', start);
-        }
-        if (end == -1) return defaultValue;
-        return json.substring(start, end).trim().replace("\\\\", "\\");
+        return defaultValue;
     }
 
-    private List<String> extractList(String json, String field) {
+    private List<String> extractArrayRegex(String json, String key) {
         List<String> list = new ArrayList<>();
-        String pattern = "\"" + field + "\":";
-        int idx = json.indexOf(pattern);
-        if (idx == -1) return list;
-        int start = json.indexOf('[', idx);
-        int end = json.indexOf(']', start);
-        if (start != -1 && end != -1) {
-            String sub = json.substring(start + 1, end);
-            String[] tokens = sub.split(",");
-            for (String t : tokens) {
-                String clean = t.trim().replaceAll("^\"|\"$", "").trim();
-                if (!clean.isEmpty()) {
-                    list.add(clean);
-                }
+        Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*\\[([^\\]]*)\\]");
+        Matcher m = p.matcher(json);
+        if (m.find()) {
+            String content = m.group(1);
+            Matcher itemMatcher = Pattern.compile("\"([^\"]+)\"").matcher(content);
+            while (itemMatcher.find()) {
+                list.add(itemMatcher.group(1).trim());
             }
         }
         return list;

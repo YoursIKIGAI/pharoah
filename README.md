@@ -24,9 +24,9 @@
 
 | Developer | Core Responsibilities | Key Classes & Deliverables |
 | :--- | :--- | :--- |
-| **VARIJ** | Project Architecture, Java Orchestrator, CLI Terminal Interface, ProcessBuilder Bridge. | `PharoahCLI`, `PythonAgentBridge`, `PythonExecutionResult`, `TaskOrchestrator`, `AgentService`, `ThreadPoolManager`. |
+| **VARIJ** | Project Architecture, Java Orchestrator, CLI Terminal Interface, ProcessBuilder Bridge. | `PharoahCLI`, `TerminalUI`, `PythonAgentBridge`, `PythonExecutionResult`, `TaskOrchestrator`, `AgentService`, `ThreadPoolManager`. |
 | **ASHUTOSH** | Python Multi-Agent Swarm, BaseAgent, Specialized Swarm Roles, Format Workflows, Execution Engine. | `python/agents/*`, `python/workflows/*`, `python/orchestrator/*`, `python/main.py`. |
-| **SANCHIT** | Database Persistence, MySQL 8.0 Schema, JDBC Connection Pooling, User Activity DAO, Workbench Audit. | `DatabaseConnectionFactory`, `UserActivityDAO`, `UserActivity`, `database/schema.sql`, `KnowledgeService`. |
+| **SANCHIT** | Database Persistence, Centralized Configuration, MySQL Schema, JDBC Connection Pooling, User Activity DAO. | `AppConfig`, `DatabaseConnectionFactory`, `UserActivityDAO`, `UserActivity`, `config.properties`, `database/schema.sql`. |
 
 ---
 
@@ -38,8 +38,12 @@
 ========================================================================
 
  [ TERMINAL PRESENTATION LAYER ]
-          │  Pure interactive command-line interface (PharoahCLI)
-          │  5-Step Format-Driven Workflow: Select Format -> Topic -> Sections -> Prio -> Agents
+          │  Pure interactive command-line interface (PharoahCLI & TerminalUI)
+          │  Breadcrumbs, status badges, and 5-step format-driven workflow
+          ▼
+ [ CENTRALIZED CONFIGURATION ]
+          │  Single source of truth: config.properties + Environment Variables
+          │  Zero hardcoded credentials in Java (AppConfig)
           ▼
  [ JAVA CORE & PROCESS BRIDGE ]
           │  Java 21 ProcessBuilder Subprocess Bridge (PythonAgentBridge)
@@ -85,13 +89,19 @@ Runs an automated, end-to-end walkthrough demonstrating the format-driven multi-
 java -cp "target/classes;lib/*" com.pharoah.app.PharoahApplication --demo
 ```
 
-### 3. Standalone Python Swarm Test
+### 3. Quick System Health & Config Check
+Inspects database connectivity, configuration parameters, and thread pool size:
+```powershell
+java -cp "target/classes;lib/*" com.pharoah.app.PharoahApplication status
+```
+
+### 4. Standalone Python Swarm Test
 Run the multi-agent swarm directly in Python:
 ```powershell
 python python/main.py --test
 ```
 
-### 4. MySQL Workbench Inspection
+### 5. MySQL Workbench Inspection
 Open **MySQL Workbench** and execute:
 ```sql
 USE pharoah_db;
@@ -113,11 +123,15 @@ SELECT * FROM user_activity ORDER BY created_at DESC;
 
 ---
 
-## 🔒 6. Database Configuration & Security
+## 🔒 6. Centralized Configuration & Security
 
-Credentials can be supplied via environment variables or configured in `db.properties`:
-* `MYSQL_URL` (default: `jdbc:mysql://localhost:3306/pharoah_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true`)
-* `MYSQL_USER` (default: `root`)
-* `MYSQL_PASSWORD` (checks environment variable first, then `db.properties`)
+All connection parameters, credentials, python commands, and terminal styling are managed through a single centralized configuration file: [`config.properties`](file:///c:/Users/varij%20chauhan/OneDrive/Desktop/pharoah/config.properties).
 
-If MySQL is unavailable, PHAROAH automatically activates an in-process SQLite fallback (`pharoah.db`) to ensure zero-crash robustness.
+Environment variables take precedence over configuration files for secure deployments:
+* `DB_URL` / `MYSQL_URL` (default: `jdbc:mysql://localhost:3306/pharoah_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true`)
+* `DB_USER` / `MYSQL_USER` (default: `root`)
+* `DB_PASSWORD` / `MYSQL_PASSWORD` (checks environment variable first, then `config.properties`)
+* `PYTHON_CMD` (default: `python`)
+* `UI_ANSI` (default: `true`)
+
+If MySQL is unavailable, PHAROAH automatically activates an in-process SQLite fallback (`pharoah.db`) to ensure zero-crash robustness. Sensitive passwords are never hardcoded in Java source files.

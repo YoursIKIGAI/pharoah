@@ -7,9 +7,9 @@ import com.pharoah.analytics.TaskAnalyticsEngine;
 import com.pharoah.bridge.PythonAgentBridge;
 import com.pharoah.bridge.PythonExecutionResult;
 import com.pharoah.cli.PharoahCLI;
+import com.pharoah.cli.TerminalUI;
 import com.pharoah.concurrency.ThreadPoolManager;
-import com.pharoah.core.model.Task;
-import com.pharoah.core.model.TaskResult;
+import com.pharoah.config.AppConfig;
 import com.pharoah.core.model.UserActivity;
 import com.pharoah.document.Document;
 import com.pharoah.document.DocumentSection;
@@ -103,29 +103,32 @@ public class PharoahApplication {
     }
 
     private void printStatus() {
-        System.out.println("=========================================================================");
-        System.out.println("  👑 PHAROAH SYSTEM STATUS");
+        AppConfig cfg = AppConfig.getInstance();
+        TerminalUI.printBanner("2.0-LTS", cfg.getDbType(), dbFactory.isMySqlActive());
+        TerminalUI.printSectionHeader("SYSTEM HEALTH & CONFIGURATION");
         System.out.printf("  Database Engine : %s (Active: %b)\n", dbFactory.getDbType(), dbFactory.isMySqlActive());
+        System.out.printf("  Database URL    : %s\n", cfg.getDbUrl());
+        System.out.printf("  Database User   : %s\n", cfg.getDbUser());
+        System.out.printf("  Database Auth   : %s\n", cfg.getMaskedPassword());
         System.out.printf("  Worker Pool     : %d Threads\n", poolManager.getPoolSize());
         System.out.printf("  Active Project  : %s\n", projectService.getActiveProject() != null ? projectService.getActiveProject().getName() : "None");
-        System.out.println("=========================================================================");
+        TerminalUI.printSectionFooter();
     }
 
     // VARIJ, ASHUTOSH, SANCHIT: Automated end-to-end demo validating format-driven multi-agent execution & persistence
     public void runAutomatedDemo() {
-        System.out.println("=========================================================================");
-        System.out.println("   👑 PHAROAH: AUTOMATED FORMAT-DRIVEN MULTI-AGENT DEMO WALKTHROUGH     ");
-        System.out.println("=========================================================================\n");
+        TerminalUI.printBanner("2.0-LTS", dbFactory.getDbType(), dbFactory.isMySqlActive());
+        TerminalUI.printSectionHeader("AUTOMATED MULTI-AGENT SWARM & PERSISTENCE DEMO");
 
         try {
             // STEP 1-5 DEMO: Execute Format-Driven Multi-Agent Swarm for "Research Paper"
-            System.out.println("--- [1] MULTI-AGENT SWARM: FORMAT-DRIVEN RESEARCH WORKFLOW ---");
+            TerminalUI.printBreadcrumb("Demo", "Multi-Agent Swarm", "Research Paper");
             String topic = "Impact of Artificial Intelligence on Cybersecurity";
             System.out.println("  Topic           : " + topic);
             System.out.println("  Workflow Format : Research Paper (Format #1)");
             System.out.println("  Selected Sections: Literature Review, Research Gap, Methodology, Data Analysis");
             System.out.println("  Priorities      : Literature Review:HIGH, Research Gap:HIGH, Methodology:MEDIUM, Data Analysis:LOW");
-            System.out.println("  Executing Swarm via Python Subprocess Bridge...\n");
+            TerminalUI.printInfo("Dispatching swarm via Python Subprocess Bridge...\n");
 
             PythonExecutionResult swarmResult = pythonBridge.runWorkflow(
                     "1",
@@ -135,11 +138,12 @@ public class PharoahApplication {
                     "Literature Review:Research Specialist,Research Gap:Analysis Specialist,Methodology:Research Specialist,Data Analysis:Data & Metrics Analyst"
             );
 
-            System.out.printf("\n  Swarm Status     : %s (Duration: %.2fs)\n", swarmResult.getStatus(), swarmResult.getElapsedSeconds());
-            System.out.printf("  Generated Artifact: %s\n", swarmResult.getOutputFile());
+            System.out.println();
+            TerminalUI.printSuccess(String.format("Swarm Status: %s in %.2fs", swarmResult.getStatus(), swarmResult.getElapsedSeconds()));
+            TerminalUI.printInfo("Compiled Artifact: " + swarmResult.getOutputFile());
 
             // PERSISTENCE: Save to MySQL user_activity table
-            System.out.println("\n--- [2] DATABASE PERSISTENCE: LOGGING USER ACTIVITY TO MYSQL ---");
+            TerminalUI.printBreadcrumb("Demo", "MySQL Persistence");
             UserActivity demoActivity = new UserActivity(
                     "University Student",
                     topic,
@@ -148,40 +152,40 @@ public class PharoahApplication {
                     "Research Specialist, Analysis Specialist, Data & Metrics Analyst, Quality Reviewer"
             );
             userActivityDAO.recordActivity(demoActivity);
-            System.out.println("  Successfully recorded activity into MySQL 'user_activity' table!");
+            TerminalUI.printSuccess("Activity logged to MySQL table 'user_activity'!");
 
             List<UserActivity> activities = userActivityDAO.getAllActivities();
-            System.out.printf("  Total Activities in Database: %d\n", activities.size());
+            System.out.printf("  Total Records in Database: %d\n", activities.size());
             if (!activities.isEmpty()) {
-                System.out.println("  Latest Record: " + activities.get(0));
+                System.out.println("  Latest Audit Row: " + activities.get(0));
             }
 
             // Java Project Management Verification
-            System.out.println("\n--- [3] MODULE A: PROJECT ISOLATION & KNOWLEDGE ASSETS ---");
+            TerminalUI.printBreadcrumb("Demo", "Project Isolation");
             Project project = projectService.createProject("Cybersecurity LLM Invariants", "Evaluates defensive invariants against prompt injections.");
-            System.out.println("  Active Project: " + project.getName() + " (ID: " + project.getProjectId().substring(0, Math.min(8, project.getProjectId().length())) + ")");
+            TerminalUI.printSuccess("Active Project: " + project.getName() + " (ID: " + project.getProjectId().substring(0, Math.min(8, project.getProjectId().length())) + ")");
 
             KnowledgeResource res = knowledgeService.saveResource(project.getProjectId(),
                     "Adversarial Robustness in LLM Agents", ResourceType.URL, "https://arxiv.org/abs/2302.12173", "SECURITY");
-            System.out.println("  Persisted Knowledge Asset: " + res.getTitle() + " (" + res.getResourceType() + ")");
+            TerminalUI.printSuccess("Persisted Knowledge Asset: " + res.getTitle() + " (" + res.getResourceType() + ")");
 
             // Document Compilation Verification
-            System.out.println("\n--- [4] MODULE F: MULTI-SECTION DOCUMENT COMPILATION ---");
+            TerminalUI.printBreadcrumb("Demo", "Document Compilation");
             Document doc = documentService.createDocumentWithTemplate(project.getProjectId(), "Cybersecurity Defense Paper", DocumentType.RESEARCH_PAPER);
             List<DocumentSection> sections = documentService.getSections(doc.getDocumentId());
             if (!sections.isEmpty()) {
                 DocumentSection firstSec = sections.get(0);
                 documentService.updateSectionContent(firstSec.getSectionId(), "Formal verification of prompt guardrails across autonomous multi-agent systems.");
                 documentService.reviewSection(firstSec.getSectionId(), true);
-                System.out.println("  Drafted & Approved Section: " + firstSec.getSectionName());
+                TerminalUI.printSuccess("Drafted & Approved Section: " + firstSec.getSectionName());
             }
 
-            System.out.println("\n=========================================================================");
-            System.out.println("  🎉 VERIFICATION PASSED: FORMAT-DRIVEN MULTI-AGENT ARCHITECTURE FUNCTIONAL!");
-            System.out.println("=========================================================================");
+            TerminalUI.printSectionHeader("DEMO VERIFICATION COMPLETE");
+            TerminalUI.printSuccess("All format-driven workflows, multi-agent swarms, and MySQL persistence verified!");
+            TerminalUI.printSectionFooter();
 
         } catch (Exception e) {
-            System.err.println("Demo encountered error: " + e.getMessage());
+            TerminalUI.printError("Demo encountered error: " + e.getMessage());
             e.printStackTrace();
         }
     }
