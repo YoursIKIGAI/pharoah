@@ -56,6 +56,10 @@ public class PythonExecutionResult {
         return agentsUsed;
     }
 
+    public List<String> getAgents() {
+        return agentsUsed;
+    }
+
     public String getOutputFile() {
         return outputFile;
     }

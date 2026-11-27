@@ -6,6 +6,11 @@ target/
 *.db
 *.db-journal
 
+# Configuration files with real settings (templates are in *.example)
+config.properties
+db.properties
+src/main/resources/db.properties
+
 # IDE and Editor files
 .idea/
 *.iml

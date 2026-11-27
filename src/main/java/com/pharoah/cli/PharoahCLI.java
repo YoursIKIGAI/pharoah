@@ -1,6 +1,9 @@
 package com.pharoah.cli;
 
+import com.pharoah.bridge.PythonAgentBridge;
+import com.pharoah.bridge.PythonExecutionResult;
 import com.pharoah.core.enums.Priority;
+import com.pharoah.core.model.UserActivity;
 import com.pharoah.orchestrator.*;
 import com.pharoah.persistence.dao.UserActivityDAO;
 
@@ -8,18 +11,19 @@ import java.io.File;
 import java.util.*;
 
 // VARIJ, ASHUTOSH, SANCHIT: Clean, Streamlined Terminal Interface for PHAROAH.
-// Follows the 4-step interaction flow:
-// 1. Number of agents
-// 2. Select Agent Kind & Topic (with dynamic sub-topics)
-// 3. Execution mode & priorities
-// 4. Concurrency deployment with file-based persistence in outputs/ (no console dump)
+// Supports both Native Java Swarm Orchestration and Python Swarm via ProcessBuilder Bridge.
+// Automatically records execution audit logs into MySQL user_activity table.
 public class PharoahCLI {
 
     private final WorkflowOrchestrator workflowOrchestrator;
+    private final UserActivityDAO userActivityDAO;
+    private final PythonAgentBridge pythonBridge;
     private final Scanner scanner;
 
     public PharoahCLI(UserActivityDAO userActivityDAO) {
+        this.userActivityDAO = userActivityDAO;
         this.workflowOrchestrator = new WorkflowOrchestrator(userActivityDAO);
+        this.pythonBridge = new PythonAgentBridge();
         this.scanner = new Scanner(System.in);
     }
 
@@ -33,34 +37,20 @@ public class PharoahCLI {
         while (continueRunning) {
             printHeader();
 
-            // STEP 1: SELECT NUMBER OF AGENTS
-            int agentCount = promptAgentCount();
+            System.out.println("Select Orchestration Engine:");
+            System.out.println("  1. Native Java Swarm (User-defined agents, multithreading, priority ready-queue)");
+            System.out.println("  2. Python Multi-Agent Swarm (ProcessBuilder Bridge execution)");
+            System.out.println("  3. Exit");
+            System.out.print("Choice (1-3) [default: 1]: ");
+            String mainChoice = scanner.nextLine().trim();
 
-            // STEP 2: CONFIGURE AGENT KIND, TOPIC, AND DYNAMIC SUB-TOPICS
-            List<AgentDeployment> deployments = promptAgentConfigurations(agentCount);
-
-            // STEP 3: SPECIFY PRIORITIES AND EXECUTION MODE
-            promptAgentPriorities(deployments);
-            ExecutionMode mode = promptExecutionMode();
-
-            // STEP 4: CONFIRMATION & EXECUTION
-            System.out.print("\nDeploy agents? (Y/N) [default: Y]: ");
-            String confirm = scanner.nextLine().trim();
-            if (confirm.equalsIgnoreCase("n") || confirm.equalsIgnoreCase("no")) {
-                System.out.println("Workflow deployment cancelled.");
+            if ("3".equals(mainChoice)) {
+                System.out.println("\nExiting PHAROAH.");
+                break;
+            } else if ("2".equals(mainChoice)) {
+                runPythonSwarmFlow();
             } else {
-                WorkflowPlan plan = new WorkflowPlan(
-                        WorkflowCategory.CUSTOM_WORKFLOW,
-                        "Multi-Agent Execution",
-                        deployments,
-                        Math.max(1, agentCount),
-                        mode
-                );
-
-                WorkflowExecutionResult result = workflowOrchestrator.executeWorkflow(plan);
-
-                // FILE-BASED OUTPUT SUMMARY (Outputs saved to outputs/ folder, not dumped to console)
-                displayFileSummary(result, plan);
+                runJavaSwarmFlow();
             }
 
             System.out.print("\nRun another workflow? (Y/N) [default: N]: ");
@@ -69,6 +59,95 @@ public class PharoahCLI {
                 System.out.println("\nExiting PHAROAH. All persistent data preserved in outputs/ and database.");
                 continueRunning = false;
             }
+        }
+    }
+
+    private void runJavaSwarmFlow() {
+        // STEP 1: SELECT NUMBER OF AGENTS
+        int agentCount = promptAgentCount();
+
+        // STEP 2: CONFIGURE AGENT KIND, TOPIC, AND DYNAMIC SUB-TOPICS
+        List<AgentDeployment> deployments = promptAgentConfigurations(agentCount);
+
+        // STEP 3: SPECIFY PRIORITIES AND EXECUTION MODE
+        promptAgentPriorities(deployments);
+        ExecutionMode mode = promptExecutionMode();
+
+        // STEP 4: CONFIRMATION & EXECUTION
+        System.out.print("\nDeploy agents? (Y/N) [default: Y]: ");
+        String confirm = scanner.nextLine().trim();
+        if (confirm.equalsIgnoreCase("n") || confirm.equalsIgnoreCase("no")) {
+            System.out.println("Workflow deployment cancelled.");
+        } else {
+            WorkflowPlan plan = new WorkflowPlan(
+                    WorkflowCategory.CUSTOM_WORKFLOW,
+                    "Multi-Agent Execution",
+                    deployments,
+                    Math.max(1, agentCount),
+                    mode
+            );
+
+            WorkflowExecutionResult result = workflowOrchestrator.executeWorkflow(plan);
+
+            // FILE-BASED OUTPUT SUMMARY (Outputs saved to outputs/ folder, not dumped to console)
+            displayFileSummary(result, plan);
+        }
+    }
+
+    private void runPythonSwarmFlow() {
+        System.out.println("\n--------------------------------------------------");
+        System.out.println("Python Multi-Agent Swarm via Subprocess Bridge");
+        System.out.println("--------------------------------------------------");
+        System.out.println("Available Workflows:");
+        System.out.println("  1. Research Paper");
+        System.out.println("  2. Technical Documentation");
+        System.out.println("  3. Creative Writing");
+        System.out.println("  4. Analytical Report");
+        System.out.println("  5. Business Proposal");
+        System.out.print("Select Workflow (1-5) [default: 1]: ");
+        String wfChoice = scanner.nextLine().trim();
+        String wf = wfChoice.isEmpty() ? "1" : wfChoice;
+
+        System.out.print("Enter Topic [default: Impact of Artificial Intelligence on Cybersecurity]: ");
+        String topicInput = scanner.nextLine().trim();
+        String topic = topicInput.isEmpty() ? "Impact of Artificial Intelligence on Cybersecurity" : topicInput;
+
+        System.out.print("Enter Sections or 'ALL' [default: ALL]: ");
+        String sectionsInput = scanner.nextLine().trim();
+        String sections = sectionsInput.isEmpty() ? "ALL" : sectionsInput;
+
+        System.out.println("\n[BRIDGE] Launching Python Swarm subprocess...");
+        PythonExecutionResult pyResult = pythonBridge.runWorkflow(wf, topic, sections, "", "");
+
+        if (pyResult.isSuccess()) {
+            System.out.println("\n==================================================");
+            System.out.println("PYTHON SWARM COMPLETED SUCCESSFULLY");
+            System.out.println("==================================================");
+            System.out.println("Topic        : " + pyResult.getTopic());
+            System.out.println("Workflow     : " + pyResult.getWorkflow());
+            System.out.println("Output File  : " + pyResult.getOutputFile());
+            System.out.printf("Duration     : %.2fs\n", pyResult.getElapsedSeconds());
+            System.out.println("==================================================");
+
+            if (userActivityDAO != null) {
+                try {
+                    String sectionsStr = String.join(", ", pyResult.getSections());
+                    String agentsStr = String.join(", ", pyResult.getAgents());
+                    UserActivity activity = new UserActivity(
+                            "User",
+                            pyResult.getTopic(),
+                            "Python Swarm (" + pyResult.getWorkflow() + ")",
+                            sectionsStr.isEmpty() ? "All" : sectionsStr,
+                            agentsStr.isEmpty() ? "Python Swarm" : agentsStr
+                    );
+                    userActivityDAO.recordActivity(activity);
+                    System.out.println("[AUDIT] Recorded Python swarm execution in MySQL user_activity table.");
+                } catch (Exception e) {
+                    System.err.println("[WARNING] Failed to record Python activity in database: " + e.getMessage());
+                }
+            }
+        } else {
+            System.err.println("\n[!] Python swarm execution failed or timed out: " + pyResult.getStatus());
         }
     }
 

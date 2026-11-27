@@ -1,54 +1,29 @@
 # ============================================================================
 # ASHUTOSH: PHAROAH Multi-Agent Orchestrator - Workflow Executor
-# Executes selected sections in dependency- and priority-informed sequence.
+# Executes selected sections concurrently with ThreadPoolExecutor,
+# honoring dependencies and priorities, and preserving section order in final doc.
 # Streams live agent status, reasoning, reviews, and synthesizes final artifact.
 # ============================================================================
 
 import os
 import time
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Any
 from workflows.base_workflow import BaseWorkflow
 from orchestrator.main_agent import MainAgent
 
 class WorkflowExecutor:
     """
-    ASHUTOSH: Workflow Executor coordinates the live step-by-step terminal execution
-    of the multi-agent swarm, tracking priorities, timing, and artifact compilation.
+    ASHUTOSH: Workflow Executor coordinates concurrent terminal execution
+    of the multi-agent swarm using ThreadPoolExecutor, honoring dependencies
+    and priorities, and preserving section order in the final document.
     """
 
     def __init__(self, main_agent: MainAgent):
         self.main_agent = main_agent
-
-    def plan_execution_order(self, workflow: BaseWorkflow, sections: List[str], priorities: Dict[str, str]) -> List[str]:
-        """
-        Sorts sections by priority (HIGH -> MEDIUM -> LOW) while respecting dependencies.
-        """
-        prio_weight = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
-
-        # Build dependency graph
-        deps_map = {}
-        for sec in sections:
-            cfg = workflow.get_section_config(sec)
-            deps = [d for d in cfg.get("dependencies", []) if d in sections]
-            deps_map[sec] = deps
-
-        ordered: List[str] = []
-        remaining = list(sections)
-
-        while remaining:
-            # Candidates are items whose dependencies are already resolved in ordered
-            candidates = [s for s in remaining if all(d in ordered for d in deps_map[s])]
-            if not candidates:
-                # Cycle or unfulfilled dependency; break tie with highest priority
-                candidates = remaining
-
-            # Pick highest priority candidate
-            best = max(candidates, key=lambda s: prio_weight.get(priorities.get(s, "MEDIUM").upper(), 2))
-            ordered.append(best)
-            remaining.remove(best)
-
-        return ordered
+        self._lock = threading.Lock()
 
     def run(self,
             topic: str,
@@ -66,50 +41,99 @@ class WorkflowExecutor:
         print(f" Active Swarm   : Research, Analysis, Writing, Data, Reviewer")
         print("=" * 76 + "\n", flush=True)
 
-        execution_order = self.plan_execution_order(workflow, sections, priorities)
-        print(">>> MAIN ORCHESTRATOR: Execution Plan established:")
-        for idx, sec in enumerate(execution_order, 1):
+        prio_weight = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+
+        # Build dependency map
+        deps_map = {}
+        for sec in sections:
+            cfg = workflow.get_section_config(sec)
+            deps = [d for d in cfg.get("dependencies", []) if d in sections]
+            deps_map[sec] = deps
+
+        print(">>> MAIN ORCHESTRATOR: Concurrency Graph established:")
+        for idx, sec in enumerate(sections, 1):
             assigned_agent = agent_assignments.get(sec, workflow.get_default_agent(sec))
             prio = priorities.get(sec, workflow.get_default_priority(sec))
-            print(f"    Step {idx}. [{prio:<6}] {sec:<24} -> {assigned_agent}")
+            dep_str = ", ".join(deps_map[sec]) if deps_map[sec] else "None (Independent)"
+            print(f"    Section {idx}. [{prio:<6}] {sec:<24} -> {assigned_agent} (Depends on: {dep_str})")
         print("-" * 76, flush=True)
 
-        results = []
-        document_parts = []
-        unique_agents = set()
-
         total_start = time.time()
+        completed_results: Dict[str, Any] = {}
+        unique_agents = set()
+        running_futures = {}
+        dispatched = set()
+        remaining = list(sections)
 
-        for idx, sec in enumerate(execution_order, 1):
-            assigned_agent = agent_assignments.get(sec, workflow.get_default_agent(sec))
-            prio = priorities.get(sec, workflow.get_default_priority(sec))
-            unique_agents.add(assigned_agent)
+        max_workers = min(4, max(1, len(sections)))
 
-            print(f"\n--- [STAGE {idx}/{len(execution_order)}] Executing Section: '{sec}' ---")
-            print(f"  [WAITING] Section queued with priority {prio}...")
-            time.sleep(0.3)
+        def execute_single_section(sec_name: str, assigned_ag: str, prio_str: str) -> Dict[str, Any]:
+            with self._lock:
+                print(f"\n[RUNNING] Section '{sec_name}' assigned to {assigned_ag} (Priority: {prio_str})...", flush=True)
 
-            # Context contains prior generated content so agents have continuity
+            with self._lock:
+                prior_snapshot = list(completed_results.values())
+
             context = {
                 "topic": topic,
                 "workflow": workflow.name,
-                "prior_sections": results
+                "prior_sections": prior_snapshot
             }
 
+            time.sleep(0.3)
             # 1. Specialized Agent execution
-            sec_result = self.main_agent.execute_section(sec, topic, assigned_agent, context)
-            results.append(sec_result)
-            document_parts.append(sec_result["content"])
+            sec_res = self.main_agent.execute_section(sec_name, topic, assigned_ag, context)
 
             # 2. Quality Reviewer Pass
             time.sleep(0.2)
-            audit_result = self.main_agent.audit_section(sec, topic, context)
-            unique_agents.add(audit_result["agent"])
-            print(audit_result["audit_feedback"], flush=True)
+            audit_res = self.main_agent.audit_section(sec_name, topic, context)
+
+            with self._lock:
+                unique_agents.add(assigned_ag)
+                unique_agents.add(audit_res["agent"])
+                print(audit_res["audit_feedback"], flush=True)
+                print(f"[COMPLETED] Section '{sec_name}' successfully verified.", flush=True)
+
+            return sec_res
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            while len(completed_results) < len(sections):
+                # Find all sections whose dependencies have completed and are not yet dispatched
+                eligible = []
+                for s in remaining:
+                    if s not in dispatched and all(d in completed_results for d in deps_map[s]):
+                        eligible.append(s)
+
+                if not eligible and not running_futures:
+                    # Circular or unfulfilled dependency; break cycle by dispatching remaining highest-priority
+                    eligible = [s for s in remaining if s not in dispatched]
+
+                # Sort eligible by priority descending
+                eligible.sort(key=lambda s: prio_weight.get(priorities.get(s, "MEDIUM").upper(), 2), reverse=True)
+
+                for sec in eligible:
+                    dispatched.add(sec)
+                    assigned_agent = agent_assignments.get(sec, workflow.get_default_agent(sec))
+                    prio = priorities.get(sec, workflow.get_default_priority(sec))
+                    fut = pool.submit(execute_single_section, sec, assigned_agent, prio)
+                    running_futures[fut] = sec
+
+                # Wait for at least one running future to complete
+                done_any = False
+                for fut in list(running_futures.keys()):
+                    if fut.done():
+                        sec_done = running_futures.pop(fut)
+                        remaining.remove(sec_done)
+                        completed_results[sec_done] = fut.result()
+                        done_any = True
+
+                if not done_any:
+                    time.sleep(0.05)
 
         total_elapsed = round(time.time() - total_start, 2)
 
-        # Assemble Full Document
+        # Assemble Full Document - strictly preserving original section order in final doc
+        document_parts = [completed_results[sec]["content"] for sec in sections if sec in completed_results]
         full_document = (
             f"# {topic}\n\n"
             f"*Generated by PHAROAH Multi-Agent Orchestration System*\n"

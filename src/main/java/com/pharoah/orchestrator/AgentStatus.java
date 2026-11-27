@@ -6,7 +6,8 @@ public enum AgentStatus {
     READY("READY", "[▶] READY"),
     RUNNING("RUNNING", "[⏳] RUNNING"),
     COMPLETED("COMPLETED", "[✓] COMPLETED"),
-    FAILED("FAILED", "[✗] FAILED");
+    FAILED("FAILED", "[✗] FAILED"),
+    SKIPPED("SKIPPED", "[-] SKIPPED");
 
     private final String displayName;
     private final String badge;

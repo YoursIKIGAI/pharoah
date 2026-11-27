@@ -1,13 +1,15 @@
 package com.pharoah.config;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.util.Properties;
 
 // SANCHIT & VARIJ: Centralized Configuration Manager.
-// Loads system configuration from config.properties, .env, or environment variables.
-// Eliminates scattered configuration values and hardcoded credentials across the codebase.
+// Loads system configuration strictly from environment variables (DB_URL, DB_USER, DB_PASSWORD)
+// with non-secret properties from config.properties as fallback. Sensitive credentials are never read from files.
 public class AppConfig {
 
     private static volatile AppConfig instance;
@@ -26,13 +28,14 @@ public class AppConfig {
     private AppConfig() {
         Properties props = loadProperties();
 
-        // 1. Database Configuration with Environment Variable Precedence
+        // 1. Database Configuration: credentials resolved ONLY from environment variables (DB_URL, DB_USER, DB_PASSWORD)
+        // Non-secret defaults/fallbacks come from config.properties. dbPassword NEVER falls back to properties.
         this.dbType = getEnvOrProp("DB_TYPE", props, "db.type", "mysql");
         this.dbDriver = getEnvOrProp("DB_DRIVER", props, "db.driver", "com.mysql.cj.jdbc.Driver");
         this.dbUrl = getEnvOrProp("DB_URL", "MYSQL_URL", props, "db.url",
-                "jdbc:mysql://localhost:3306/pharoah_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true");
+                "jdbc:mysql://127.0.0.1:3306/pharoah_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true");
         this.dbUser = getEnvOrProp("DB_USER", "MYSQL_USER", props, "db.user", "root");
-        this.dbPassword = getEnvOrProp("DB_PASSWORD", "MYSQL_PASSWORD", props, "db.password", "");
+        this.dbPassword = resolveDbPassword();
         this.dbFallbackSqlite = getEnvOrProp("DB_FALLBACK", props, "db.fallback.sqlite", "jdbc:sqlite:pharoah.db");
 
         // 2. Python Runtime Configuration
@@ -45,6 +48,35 @@ public class AppConfig {
         // 4. Pluggable AI Configuration
         this.aiProvider = getEnvOrProp("AI_PROVIDER", props, "ai.provider", "MOCK_HEURISTIC");
         this.aiEndpoint = getEnvOrProp("AI_ENDPOINT", props, "ai.endpoint", "http://localhost:11434/api/generate");
+    }
+
+    private String resolveDbPassword() {
+        String val = System.getenv("DB_PASSWORD");
+        if (val != null && !val.isBlank()) {
+            return val.trim();
+        }
+        val = System.getenv("MYSQL_PASSWORD");
+        if (val != null && !val.isBlank()) {
+            return val.trim();
+        }
+        // Fallback for Windows environments where process hasn't reloaded user registry
+        if (System.getProperty("os.name", "").toLowerCase().contains("win")) {
+            try {
+                Process proc = new ProcessBuilder("reg", "query", "HKCU\\Environment", "/v", "DB_PASSWORD").start();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(proc.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (line.contains("DB_PASSWORD")) {
+                            String[] parts = line.trim().split("\\s+", 3);
+                            if (parts.length >= 3) {
+                                return parts[2].trim();
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        return "";
     }
 
     public static AppConfig getInstance() {

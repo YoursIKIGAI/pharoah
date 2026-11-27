@@ -4,44 +4,73 @@ import com.pharoah.config.AppConfig;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
 
-// VARIJ: Implemented PythonAgentBridge.
-// Bridges the Java application and terminal interface with the Python Multi-Agent Swarm.
-// Launches Python subprocess via ProcessBuilder and streams live agent execution logs in real time.
+// VARIJ & ASHUTOSH: Robust ProcessBuilder Bridge to Python Multi-Agent Swarm.
+// Resolves python/main.py from project root, enforces UTF-8 unbuffered subprocess execution,
+// drains stderr on a dedicated thread, implements hard timeout process termination,
+// and parses the JSON outcome with RFC 8259 SimpleJsonParser without regex.
 public class PythonAgentBridge {
 
     private final String pythonExecutable;
-    private final File workingDirectory;
+    private final File projectRoot;
+    private final long timeoutSeconds;
 
-    public PythonAgentBridge() {
-        this.workingDirectory = new File(".").getAbsoluteFile();
-        String configured = AppConfig.getInstance().getPythonCommand();
-        if (configured != null && !configured.isBlank() && !configured.equalsIgnoreCase("python")) {
-            this.pythonExecutable = configured;
+    public PythonAgentBridge(String customPythonPath, long timeoutSeconds) {
+        this.projectRoot = resolveProjectRoot();
+        this.timeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : 300L;
+
+        if (customPythonPath != null && !customPythonPath.isBlank()) {
+            this.pythonExecutable = customPythonPath;
         } else {
-            this.pythonExecutable = detectPythonExecutable();
+            String configured = AppConfig.getInstance().getPythonCommand();
+            if (configured != null && !configured.isBlank() && !configured.equalsIgnoreCase("python")) {
+                this.pythonExecutable = configured;
+            } else {
+                this.pythonExecutable = detectPythonExecutable();
+            }
         }
     }
 
-    public PythonAgentBridge(String customPythonPath) {
-        this.pythonExecutable = customPythonPath;
-        this.workingDirectory = new File(".").getAbsoluteFile();
+    public PythonAgentBridge(long timeoutSeconds) {
+        this(null, timeoutSeconds);
     }
 
-    // VARIJ: Detects available python executable on host OS
+    public PythonAgentBridge() {
+        this(null, 300L);
+    }
+
+    public PythonAgentBridge(String customPythonPath) {
+        this(customPythonPath, 300L);
+    }
+
+    // Resolves project root by verifying python/main.py existence upwards
+    private static File resolveProjectRoot() {
+        File current = new File(".").getAbsoluteFile();
+        while (current != null) {
+            File testScript = new File(current, "python" + File.separator + "main.py");
+            if (testScript.exists()) {
+                return current;
+            }
+            File pom = new File(current, "pom.xml");
+            if (pom.exists() && new File(current, "python").isDirectory()) {
+                return current;
+            }
+            current = current.getParentFile();
+        }
+        return new File(".").getAbsoluteFile();
+    }
+
     private String detectPythonExecutable() {
         String[] candidates = {"python", "python3", "py"};
         for (String c : candidates) {
             try {
                 Process p = new ProcessBuilder(c, "--version").start();
-                int code = p.waitFor();
-                if (code == 0) {
+                if (p.waitFor(3, TimeUnit.SECONDS) && p.exitValue() == 0) {
                     return c;
                 }
             } catch (Exception ignored) {}
@@ -49,16 +78,21 @@ public class PythonAgentBridge {
         return "python";
     }
 
-    // VARIJ: Executes Python Multi-Agent Swarm with real-time output streaming
     public PythonExecutionResult runWorkflow(String workflow,
                                              String topic,
                                              String sections,
                                              String priorities,
                                              String agents) {
 
+        File mainPy = new File(projectRoot, "python" + File.separator + "main.py");
+        if (!mainPy.exists()) {
+            System.err.println("  [!] Error: python/main.py could not be found at " + mainPy.getAbsolutePath());
+            return new PythonExecutionResult(false, "FILE_NOT_FOUND", topic, workflow, List.of(), List.of(), "", 0.0);
+        }
+
         List<String> command = new ArrayList<>();
         command.add(pythonExecutable);
-        command.add("python/main.py");
+        command.add(mainPy.getAbsolutePath());
         command.add("--workflow");
         command.add(workflow != null ? workflow : "1");
         command.add("--topic");
@@ -76,99 +110,167 @@ public class PythonAgentBridge {
             command.add(agents);
         }
 
+        return executeProcess(command, topic, workflow);
+    }
+
+    // Executes process with proper environment, stderr draining, and timeout management
+    public PythonExecutionResult executeProcess(List<String> command, String fallbackTopic, String fallbackWorkflow) {
         StringBuilder jsonBuilder = new StringBuilder();
-        boolean capturingJson = false;
+        List<String> stderrLines = Collections.synchronizedList(new ArrayList<>());
+        Process process = null;
 
         try {
             ProcessBuilder pb = new ProcessBuilder(command);
-            pb.directory(workingDirectory);
-            pb.redirectErrorStream(true);
+            pb.directory(projectRoot);
+            pb.redirectErrorStream(false); // Separate stderr and stdout streams
 
-            Process process = pb.start();
+            Map<String, String> env = pb.environment();
+            env.put("PYTHONIOENCODING", "utf-8");
+            env.put("PYTHONUNBUFFERED", "1");
 
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (line.contains("__PHAROAH_JSON_RESULT_START__")) {
-                        capturingJson = true;
-                        continue;
-                    }
-                    if (line.contains("__PHAROAH_JSON_RESULT_END__")) {
-                        capturingJson = false;
-                        continue;
-                    }
+            process = pb.start();
 
-                    if (capturingJson) {
-                        jsonBuilder.append(line);
-                    } else {
-                        // Stream live output to terminal
-                        System.out.println(line);
+            // Thread to drain stderr without blocking stdout
+            Process finalProcess = process;
+            Thread stderrThread = new Thread(() -> {
+                try (BufferedReader errReader = new BufferedReader(new InputStreamReader(finalProcess.getErrorStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = errReader.readLine()) != null) {
+                        stderrLines.add(line);
+                        System.err.println("  [PYTHON-STDERR] " + line);
                     }
+                } catch (IOException ignored) {}
+            }, "Python-StderrDrainer");
+            stderrThread.setDaemon(true);
+            stderrThread.start();
+
+            // Thread to read stdout and extract structured JSON payload
+            Thread stdoutThread = new Thread(() -> {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(finalProcess.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    boolean capturingJson = false;
+                    while ((line = reader.readLine()) != null) {
+                        if (line.contains("__PHAROAH_JSON_RESULT_START__")) {
+                            capturingJson = true;
+                            continue;
+                        }
+                        if (line.contains("__PHAROAH_JSON_RESULT_END__")) {
+                            capturingJson = false;
+                            continue;
+                        }
+
+                        if (capturingJson) {
+                            jsonBuilder.append(line).append("\n");
+                        } else {
+                            System.out.println(line);
+                        }
+                    }
+                } catch (IOException ignored) {}
+            }, "Python-StdoutReader");
+            stdoutThread.start();
+
+            boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+            if (!finished) {
+                System.err.println("  [!] Subprocess timed out after " + timeoutSeconds + "s. Destroying process forcibly...");
+                process.destroy();
+                if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
                 }
+                return new PythonExecutionResult(false, "TIMEOUT", fallbackTopic, fallbackWorkflow, List.of(), List.of(), "", 0.0);
             }
 
-            int exitCode = process.waitFor();
+            stdoutThread.join(2000);
+            stderrThread.join(2000);
+
+            int exitCode = process.exitValue();
             if (exitCode != 0) {
-                System.err.println("  [!] Swarm process finished with non-zero exit code: " + exitCode);
-                return new PythonExecutionResult(false, "FAILED", topic, workflow, List.of(), List.of(), "", 0.0);
+                System.err.println("  [!] Python process exited with non-zero code: " + exitCode);
+                return new PythonExecutionResult(false, "FAILED", fallbackTopic, fallbackWorkflow, List.of(), List.of(), "", 0.0);
             }
 
-            return parseJsonResult(jsonBuilder.toString(), topic, workflow);
+            return parseJsonResult(jsonBuilder.toString().trim(), fallbackTopic, fallbackWorkflow);
 
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            System.err.println("  [!] Execution interrupted. Destroying Python process...");
+            if (process != null) {
+                process.destroy();
+                try {
+                    if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                        process.destroyForcibly();
+                    }
+                } catch (InterruptedException ignored) {}
+            }
+            return new PythonExecutionResult(false, "INTERRUPTED", fallbackTopic, fallbackWorkflow, List.of(), List.of(), "", 0.0);
         } catch (Exception e) {
-            System.err.println("  [!] Failed to execute Python agent swarm: " + e.getMessage());
-            return new PythonExecutionResult(false, "ERROR", topic, workflow, List.of(), List.of(), "", 0.0);
+            System.err.println("  [!] Subprocess launch failure: " + e.getMessage());
+            return new PythonExecutionResult(false, "ERROR", fallbackTopic, fallbackWorkflow, List.of(), List.of(), "", 0.0);
         }
     }
 
-    // VARIJ: Parses the JSON summary payload produced at the end of Python execution
+    // Parses structured JSON machine payload using RFC 8259 SimpleJsonParser without regex
     private PythonExecutionResult parseJsonResult(String rawJson, String fallbackTopic, String fallbackWorkflow) {
-        if (rawJson == null || rawJson.trim().isEmpty()) {
+        if (rawJson == null || rawJson.isBlank()) {
             return new PythonExecutionResult(true, "COMPLETED", fallbackTopic, fallbackWorkflow,
-                    List.of("All"), List.of("Swarm Agents"), "", 0.0);
+                    List.of("General"), List.of("Swarm Agents"), "", 0.0);
         }
 
         try {
-            String status = extractRegex(rawJson, "\"status\"\\s*:\\s*\"([^\"]+)\"", "COMPLETED");
-            String topic = extractRegex(rawJson, "\"topic\"\\s*:\\s*\"([^\"]+)\"", fallbackTopic);
-            String workflow = extractRegex(rawJson, "\"workflow\"\\s*:\\s*\"([^\"]+)\"", fallbackWorkflow);
-            String outputFile = extractRegex(rawJson, "\"output_file\"\\s*:\\s*\"([^\"]+)\"", "");
-            String elapsedStr = extractRegex(rawJson, "\"elapsed_seconds\"\\s*:\\s*([0-9.]+)", "0.0");
+            Map<String, Object> map = SimpleJsonParser.parseObject(rawJson);
+            if (map.isEmpty()) {
+                return new PythonExecutionResult(true, "COMPLETED", fallbackTopic, fallbackWorkflow,
+                        List.of(), List.of(), "", 0.0);
+            }
+
+            String status = String.valueOf(map.getOrDefault("status", "COMPLETED"));
+            String topic = String.valueOf(map.getOrDefault("topic", fallbackTopic));
+            String workflow = String.valueOf(map.getOrDefault("workflow", fallbackWorkflow));
+            String outputFile = String.valueOf(map.getOrDefault("output_file", ""));
 
             double elapsed = 0.0;
-            try {
-                elapsed = Double.parseDouble(elapsedStr);
-            } catch (Exception ignored) {}
+            Object elapsedObj = map.get("elapsed_seconds");
+            if (elapsedObj instanceof Number n) {
+                elapsed = n.doubleValue();
+            } else if (elapsedObj != null) {
+                try {
+                    elapsed = Double.parseDouble(elapsedObj.toString());
+                } catch (Exception ignored) {}
+            }
 
-            List<String> sections = extractArrayRegex(rawJson, "sections");
-            List<String> agents = extractArrayRegex(rawJson, "agents");
+            List<String> sections = new ArrayList<>();
+            Object secObj = map.get("sections");
+            if (secObj instanceof List<?> secList) {
+                for (Object item : secList) {
+                    if (item != null) sections.add(item.toString());
+                }
+            }
+
+            List<String> agents = new ArrayList<>();
+            Object agObj = map.get("agents");
+            if (agObj instanceof List<?> agList) {
+                for (Object item : agList) {
+                    if (item != null) agents.add(item.toString());
+                }
+            }
 
             return new PythonExecutionResult(true, status, topic, workflow, sections, agents, outputFile, elapsed);
+
         } catch (Exception e) {
+            System.err.println("  [!] Failed to parse Python JSON output: " + e.getMessage());
             return new PythonExecutionResult(true, "COMPLETED", fallbackTopic, fallbackWorkflow,
                     List.of(), List.of(), "", 0.0);
         }
     }
 
-    private String extractRegex(String json, String regex, String defaultValue) {
-        Matcher m = Pattern.compile(regex).matcher(json);
-        if (m.find()) {
-            return m.group(1).replace("\\\\", "\\");
-        }
-        return defaultValue;
+    public File getProjectRoot() {
+        return projectRoot;
     }
 
-    private List<String> extractArrayRegex(String json, String key) {
-        List<String> list = new ArrayList<>();
-        Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*\\[([^\\]]*)\\]");
-        Matcher m = p.matcher(json);
-        if (m.find()) {
-            String content = m.group(1);
-            Matcher itemMatcher = Pattern.compile("\"([^\"]+)\"").matcher(content);
-            while (itemMatcher.find()) {
-                list.add(itemMatcher.group(1).trim());
-            }
-        }
-        return list;
+    public String getPythonExecutable() {
+        return pythonExecutable;
+    }
+
+    public long getTimeoutSeconds() {
+        return timeoutSeconds;
     }
 }

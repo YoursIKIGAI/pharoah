@@ -60,10 +60,11 @@ public class SpecializedAgentTask implements Callable<AgentOutput> {
                     "Execution interrupted", duration);
             context.recordOutput(deployment.getId(), failure);
             return failure;
-        } catch (Exception e) {
+        } catch (Throwable t) {
+            // VARIJ: Catch all Throwables (Errors, RuntimeExceptions) to prevent workflow deadlock
             long duration = System.currentTimeMillis() - startTime;
             AgentOutput failure = AgentOutput.failure(deployment.getId(), deployment.getName(), deployment.getResponsibility(),
-                    "Execution error: " + e.getMessage(), duration);
+                    "Execution error: " + t.getMessage(), duration);
             context.recordOutput(deployment.getId(), failure);
             return failure;
         }

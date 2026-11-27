@@ -37,7 +37,8 @@ public class AgentOutput {
     }
 
     public static AgentOutput failure(String agentId, String agentName, String responsibility, String error, long durationMs) {
-        return new AgentOutput(agentId, agentName, responsibility, "", Collections.emptyList(), durationMs, Thread.currentThread().getName(), false, error);
+        String msg = (error != null) ? error : "Unknown error";
+        return new AgentOutput(agentId, agentName, responsibility, msg, Collections.emptyList(), durationMs, Thread.currentThread().getName(), false, msg);
     }
 
     private AgentOutput(String agentId, String agentName, String responsibility, String content,
@@ -45,8 +46,8 @@ public class AgentOutput {
         this.agentId = agentId;
         this.agentName = agentName;
         this.responsibility = responsibility;
-        this.content = content;
-        this.wordCount = 0;
+        this.content = (content != null) ? content : "";
+        this.wordCount = this.content.isBlank() ? 0 : this.content.split("\\s+").length;
         this.citations = citations;
         this.durationMs = durationMs;
         this.threadName = threadName;
@@ -101,6 +102,6 @@ public class AgentOutput {
 
     @Override
     public String toString() {
-        return String.format("[%s on %s] %d words in %d ms", agentName, threadName, wordCount, durationMs);
+        return String.format("[%s on %s] %d words in %d ms (success=%b)", agentName, threadName, wordCount, durationMs, success);
     }
 }

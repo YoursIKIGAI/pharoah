@@ -77,6 +77,8 @@ public class PharoahApplication {
 
     public static void main(String[] args) {
         PharoahApplication app = new PharoahApplication();
+        String activeDbDesc = app.dbFactory.isMySqlActive() ? "MySQL 8.0 (pharoah_db)" : "SQLite fallback (pharoah.db)";
+        System.out.println("[PHAROAH] Active Database: " + activeDbDesc);
 
         if (args.length > 0 && args[0].equalsIgnoreCase("--demo")) {
             app.runAutomatedDemo();
@@ -139,7 +141,8 @@ public class PharoahApplication {
 
             // Persistence Verification
             List<UserActivity> activities = userActivityDAO.getAllActivities();
-            System.out.printf("Total Records in MySQL: %d\n", activities.size());
+            String dbSource = dbFactory.isMySqlActive() ? "MySQL 8.0" : "SQLite fallback";
+            System.out.printf("Total Records in %s: %d\n", dbSource, activities.size());
             if (!activities.isEmpty()) {
                 System.out.println("Latest Audit Row: " + activities.get(0));
             }
@@ -164,7 +167,7 @@ public class PharoahApplication {
 
             System.out.println("\n==================================================");
             System.out.println("DEMO VERIFICATION COMPLETE");
-            System.out.println("Genuine Java multithreaded multi-agent orchestration & MySQL persistence verified.");
+            System.out.printf("Genuine Java multithreaded multi-agent orchestration & %s persistence verified.\n", dbSource);
             System.out.println("==================================================\n");
 
         } catch (Exception e) {

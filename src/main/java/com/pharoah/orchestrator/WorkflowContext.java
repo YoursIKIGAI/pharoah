@@ -8,7 +8,8 @@ import java.util.concurrent.locks.ReentrantLock;
 
 // VARIJ: Thread-safe shared workflow memory context.
 // Coordinates inter-agent communication, resolves DAG dependencies,
-// tracks atomic metrics, and guarantees synchronized state updates across worker threads.
+// tracks atomic metrics, propagates dependency failures transitively,
+// and guarantees synchronized state updates across worker threads.
 public class WorkflowContext {
 
     private final String workflowCategory;
@@ -56,7 +57,7 @@ public class WorkflowContext {
         return sb.toString();
     }
 
-    // Records completed agent output and signals waiting threads
+    // Records completed agent output, propagates failures transitively, and signals waiting threads
     public void recordOutput(String agentId, AgentOutput output) {
         lock.lock();
         try {
@@ -78,7 +79,48 @@ public class WorkflowContext {
             }
             activeThreads.decrementAndGet();
 
+            // Transitively propagate failures to all dependent downstream agents
+            propagateFailures();
+
             // Wake up orchestrator to dispatch newly unblocked dependent agents
+            stateChanged.signalAll();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // VARIJ: Propagate upstream failures transitively to dependent waiting/ready agents
+    public void propagateFailures() {
+        lock.lock();
+        try {
+            boolean changed = true;
+            while (changed) {
+                changed = false;
+                for (AgentDeployment a : deployedAgents) {
+                    if (a.getStatus() == AgentStatus.WAITING || a.getStatus() == AgentStatus.READY) {
+                        for (String depId : a.getDependencies()) {
+                            AgentDeployment dep = agentMap.get(depId);
+                            AgentOutput depOut = outputs.get(depId);
+                            boolean depFailed = (dep != null && (dep.getStatus() == AgentStatus.FAILED || dep.getStatus() == AgentStatus.SKIPPED))
+                                    || (depOut != null && !depOut.isSuccess());
+                            if (depFailed) {
+                                a.setStatus(AgentStatus.SKIPPED);
+                                failedTasks.incrementAndGet();
+                                AgentOutput skipOut = AgentOutput.failure(
+                                        a.getId(),
+                                        a.getName(),
+                                        a.getResponsibility(),
+                                        "Skipped due to upstream dependency failure in agent: " + depId,
+                                        0
+                                );
+                                outputs.put(a.getId(), skipOut);
+                                changed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
             stateChanged.signalAll();
         } finally {
             lock.unlock();
@@ -109,8 +151,8 @@ public class WorkflowContext {
                     ready.add(a);
                 }
             }
-            // Sort by priority weight: HIGH (1), MEDIUM (2), LOW (3)
-            ready.sort((a, b) -> a.getPriority().compareTo(b.getPriority()));
+            // Sort by priority level: HIGH (level 3) -> MEDIUM (level 2) -> LOW (level 1)
+            ready.sort((a, b) -> Integer.compare(b.getPriority().getLevel(), a.getPriority().getLevel()));
             return ready;
         } finally {
             lock.unlock();

@@ -1,5 +1,6 @@
 package com.pharoah.orchestrator;
 
+import com.pharoah.concurrency.ThreadPoolManager;
 import com.pharoah.core.enums.Priority;
 import com.pharoah.core.model.UserActivity;
 import com.pharoah.persistence.dao.UserActivityDAO;
@@ -14,33 +15,32 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 // VARIJ: Central Multi-Agent Orchestration Engine.
 // Executes agents concurrently using Java ExecutorService & FixedThreadPool.
-// Supports both Parallel and Priority-based scheduling.
+// Supports both Parallel and Priority-based scheduling using a dependency-aware ready queue.
 // Saves individual and consolidated outputs to the outputs/ directory.
 public class WorkflowOrchestrator {
 
     private final UserActivityDAO userActivityDAO;
     private final long agentLatencyMs;
+    private final long executionTimeoutMs;
+
+    public WorkflowOrchestrator(UserActivityDAO userActivityDAO, long agentLatencyMs, long executionTimeoutMs) {
+        this.userActivityDAO = userActivityDAO;
+        this.agentLatencyMs = Math.max(0, agentLatencyMs);
+        this.executionTimeoutMs = executionTimeoutMs > 0 ? executionTimeoutMs : 120_000L;
+    }
 
     public WorkflowOrchestrator(UserActivityDAO userActivityDAO) {
-        this.userActivityDAO = userActivityDAO;
-        this.agentLatencyMs = 600L;
+        this(userActivityDAO, 600L, 120_000L);
     }
 
     public WorkflowOrchestrator() {
-        this(null);
+        this(null, 600L, 120_000L);
     }
 
     public WorkflowExecutionResult executeWorkflow(WorkflowPlan plan) {
         int poolSize = Math.max(1, Math.min(plan.getAgents().size(), plan.getMaxConcurrentWorkers()));
-        ThreadFactory factory = new ThreadFactory() {
-            private int count = 1;
-            @Override
-            public Thread newThread(Runnable r) {
-                Thread t = new Thread(r, "PHAROAH-WorkerPool-" + count++);
-                t.setPriority(Thread.NORM_PRIORITY);
-                return t;
-            }
-        };
+        // Reusing ThreadPoolManager's shared worker thread factory instead of duplicating it
+        ThreadFactory factory = ThreadPoolManager.createWorkerThreadFactory("PHAROAH-WorkerPool");
 
         ExecutorService executor = Executors.newFixedThreadPool(poolSize, factory);
         WorkflowContext context = new WorkflowContext(plan.getCategory().getDisplayName(), plan.getTopic(), plan.getAgents());
@@ -54,8 +54,8 @@ public class WorkflowOrchestrator {
 
         try {
             if (plan.getExecutionMode() == ExecutionMode.PRIORITY_BASED) {
-                // Priority-Based Execution: HIGH -> MEDIUM -> LOW
-                executePriorityPhased(plan, context, executor, dispatchedAgentIds, runningFutures);
+                // Priority-Based Execution: Ready-queue scheduler respecting dependencies & prioritized dispatch
+                executePriorityPhased(plan, context, executor, dispatchedAgentIds, runningFutures, isRunning);
             } else {
                 // Parallel Execution: All eligible independent agents concurrently
                 executeParallel(plan, context, executor, dispatchedAgentIds, runningFutures, isRunning);
@@ -63,7 +63,7 @@ public class WorkflowOrchestrator {
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            System.out.println("Execution was interrupted.");
+            System.err.println("[EXECUTION INTERRUPTED] Workflow execution thread was interrupted.");
         } finally {
             isRunning.set(false);
             executor.shutdown();
@@ -80,7 +80,7 @@ public class WorkflowOrchestrator {
         return synthesizeAndPersist(plan, context);
     }
 
-    // Parallel Execution Strategy
+    // Parallel Execution Strategy with timeout protection and failure propagation
     private void executeParallel(WorkflowPlan plan,
                                  WorkflowContext context,
                                  ExecutorService executor,
@@ -89,8 +89,18 @@ public class WorkflowOrchestrator {
                                  AtomicBoolean isRunning) throws InterruptedException {
 
         Set<String> reportedCompleted = new HashSet<>();
+        long startMs = System.currentTimeMillis();
 
         while (!context.isAllCompleted() && isRunning.get()) {
+            // Check overall timeout
+            if (System.currentTimeMillis() - startMs > executionTimeoutMs) {
+                System.err.println("[TIMEOUT] Workflow execution exceeded overall timeout of " + (executionTimeoutMs / 1000) + "s. Cancelling running tasks...");
+                for (Future<AgentOutput> f : runningFutures.values()) {
+                    if (!f.isDone()) f.cancel(true);
+                }
+                break;
+            }
+
             List<AgentDeployment> readyAgents = context.getEligibleReadyAgents();
             for (AgentDeployment agent : readyAgents) {
                 if (dispatchedAgentIds.add(agent.getId())) {
@@ -110,13 +120,24 @@ public class WorkflowOrchestrator {
                 }
             }
 
-            // Check completed futures
+            // Check completed futures and log status
             for (Map.Entry<String, Future<AgentOutput>> entry : runningFutures.entrySet()) {
                 if (entry.getValue().isDone() && reportedCompleted.add(entry.getKey())) {
                     AgentDeployment agent = findAgent(plan, entry.getKey());
                     if (agent != null) {
                         String kindLabel = (agent.getKind() != null) ? " (" + agent.getKind().getDisplayName() + ")" : "";
-                        System.out.println("  " + agent.getName() + kindLabel + ": Completed");
+                        try {
+                            AgentOutput out = entry.getValue().get();
+                            if (out != null && out.isSuccess()) {
+                                System.out.println("  " + agent.getName() + kindLabel + ": Completed");
+                            } else {
+                                System.err.println("  " + agent.getName() + kindLabel + ": Failed (" + (out != null ? out.getContent() : "Unknown failure") + ")");
+                            }
+                        } catch (ExecutionException ee) {
+                            System.err.println("  [ERROR] Execution exception in agent " + agent.getName() + ": " + ee.getCause());
+                        } catch (CancellationException ce) {
+                            System.err.println("  [CANCELLED] Agent " + agent.getName() + " was cancelled.");
+                        }
                     }
                 }
             }
@@ -125,40 +146,35 @@ public class WorkflowOrchestrator {
         }
     }
 
-    // Priority-Based Execution Strategy (HIGH -> MEDIUM -> LOW)
+    // VARIJ: Ready-queue priority scheduler. Dispatches only dependency-satisfied agents ordered by priority
     private void executePriorityPhased(WorkflowPlan plan,
                                        WorkflowContext context,
                                        ExecutorService executor,
                                        Set<String> dispatchedAgentIds,
-                                       Map<String, Future<AgentOutput>> runningFutures) throws InterruptedException {
+                                       Map<String, Future<AgentOutput>> runningFutures,
+                                       AtomicBoolean isRunning) throws InterruptedException {
 
-        Priority[] priorityPhases = new Priority[]{Priority.HIGH, Priority.MEDIUM, Priority.LOW};
+        Set<String> reportedCompleted = new HashSet<>();
+        long startMs = System.currentTimeMillis();
 
-        for (Priority phase : priorityPhases) {
-            List<AgentDeployment> phaseAgents = new ArrayList<>();
-            for (AgentDeployment a : plan.getAgents()) {
-                if (a.getPriority() == phase) {
-                    phaseAgents.add(a);
+        while (!context.isAllCompleted() && isRunning.get()) {
+            // Check overall timeout
+            if (System.currentTimeMillis() - startMs > executionTimeoutMs) {
+                System.err.println("[TIMEOUT] Priority workflow exceeded overall timeout of " + (executionTimeoutMs / 1000) + "s. Cancelling running tasks...");
+                for (Future<AgentOutput> f : runningFutures.values()) {
+                    if (!f.isDone()) f.cancel(true);
                 }
+                break;
             }
 
-            if (phaseAgents.isEmpty()) continue;
-
-            // Mark other lower-priority agents as waiting
-            for (AgentDeployment a : plan.getAgents()) {
-                if (a.getPriority() != phase && !dispatchedAgentIds.contains(a.getId())) {
-                    String kindLabel = (a.getKind() != null) ? " (" + a.getKind().getDisplayName() + ")" : "";
-                    System.out.println("  " + a.getName() + kindLabel + ": Waiting");
-                }
-            }
-
-            // Dispatch all agents of this priority phase
-            List<Future<AgentOutput>> phaseFutures = new ArrayList<>();
-            for (AgentDeployment agent : phaseAgents) {
+            // getEligibleReadyAgents() returns only dependency-satisfied agents, pre-sorted by Priority (HIGH -> MEDIUM -> LOW)
+            List<AgentDeployment> readyAgents = context.getEligibleReadyAgents();
+            for (AgentDeployment agent : readyAgents) {
                 if (dispatchedAgentIds.add(agent.getId())) {
                     context.markAgentRunning(agent.getId(), "Queued");
                     String kindLabel = (agent.getKind() != null) ? " (" + agent.getKind().getDisplayName() + ")" : "";
-                    System.out.println("  " + agent.getName() + kindLabel + ": Running (" + phase + " Priority)");
+                    // Fixed logging: using agent.getPriority().getDisplayName() to avoid "High Priority Priority"
+                    System.out.println("  " + agent.getName() + kindLabel + ": Running (" + agent.getPriority().getDisplayName() + ")");
 
                     SpecializedAgentTask task = new SpecializedAgentTask(
                             agent,
@@ -168,20 +184,33 @@ public class WorkflowOrchestrator {
                     );
 
                     Future<AgentOutput> future = executor.submit(task);
-                    phaseFutures.add(future);
                     runningFutures.put(agent.getId(), future);
                 }
             }
 
-            // Wait for this priority phase to complete before advancing to next priority
-            for (int i = 0; i < phaseFutures.size(); i++) {
-                try {
-                    phaseFutures.get(i).get();
-                    AgentDeployment completedAgent = phaseAgents.get(i);
-                    String kindLabel = (completedAgent.getKind() != null) ? " (" + completedAgent.getKind().getDisplayName() + ")" : "";
-                    System.out.println("  " + completedAgent.getName() + kindLabel + ": Completed");
-                } catch (ExecutionException ignored) {}
+            // Monitor completed futures and log outputs/failures
+            for (Map.Entry<String, Future<AgentOutput>> entry : runningFutures.entrySet()) {
+                if (entry.getValue().isDone() && reportedCompleted.add(entry.getKey())) {
+                    AgentDeployment agent = findAgent(plan, entry.getKey());
+                    if (agent != null) {
+                        String kindLabel = (agent.getKind() != null) ? " (" + agent.getKind().getDisplayName() + ")" : "";
+                        try {
+                            AgentOutput out = entry.getValue().get();
+                            if (out != null && out.isSuccess()) {
+                                System.out.println("  " + agent.getName() + kindLabel + ": Completed");
+                            } else {
+                                System.err.println("  " + agent.getName() + kindLabel + ": Failed (" + (out != null ? out.getContent() : "Unknown failure") + ")");
+                            }
+                        } catch (ExecutionException ee) {
+                            System.err.println("  [ERROR] Execution exception in agent " + agent.getName() + ": " + ee.getCause());
+                        } catch (CancellationException ce) {
+                            System.err.println("  [CANCELLED] Agent " + agent.getName() + " was cancelled.");
+                        }
+                    }
+                }
             }
+
+            context.awaitStateChange(150);
         }
     }
 
@@ -195,7 +224,9 @@ public class WorkflowOrchestrator {
     // Compiles individual and consolidated outputs to the outputs/ directory
     private WorkflowExecutionResult synthesizeAndPersist(WorkflowPlan plan, WorkflowContext context) {
         File outDir = new File("outputs");
-        if (!outDir.exists()) outDir.mkdirs();
+        if (!outDir.exists() && !outDir.mkdirs()) {
+            System.err.println("[WARNING] Could not create outputs directory.");
+        }
 
         long timestamp = System.currentTimeMillis();
         Map<String, String> agentFilePaths = new LinkedHashMap<>();
@@ -211,7 +242,7 @@ public class WorkflowOrchestrator {
 
             String content = (out != null && out.getContent() != null && !out.getContent().isBlank())
                     ? out.getContent().trim()
-                    : "Content generation was interrupted for this agent.";
+                    : "Content generation was interrupted or skipped for this agent.";
 
             // 1. Prepare Individual Agent Output File
             StringBuilder agentFileContent = new StringBuilder();
@@ -228,7 +259,9 @@ public class WorkflowOrchestrator {
             try (FileWriter writer = new FileWriter(agentFile, StandardCharsets.UTF_8)) {
                 writer.write(agentFileContent.toString());
                 agentFilePaths.put(a.getId(), agentFile.getPath());
-            } catch (IOException ignored) {}
+            } catch (IOException e) {
+                System.err.println("[WARNING] Failed to write agent output file (" + agentFile.getPath() + "): " + e.getMessage());
+            }
 
             // 2. Append to Consolidated Document
             consolidatedDoc.append(a.getName()).append(": ").append(a.getResponsibility()).append("\n\n");
@@ -240,7 +273,9 @@ public class WorkflowOrchestrator {
         File consolidatedFile = new File(outDir, "pharoah_consolidated_" + timestamp + ".txt");
         try (FileWriter writer = new FileWriter(consolidatedFile, StandardCharsets.UTF_8)) {
             writer.write(fullDocument);
-        } catch (IOException ignored) {}
+        } catch (IOException e) {
+            System.err.println("[WARNING] Failed to write consolidated document (" + consolidatedFile.getPath() + "): " + e.getMessage());
+        }
 
         double totalDurationSec = context.getElapsedTimeMs() / 1000.0;
 
@@ -258,7 +293,9 @@ public class WorkflowOrchestrator {
                         agentsUsed
                 );
                 userActivityDAO.recordActivity(activity);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                System.err.println("[WARNING] Failed to record user activity in database: " + e.getMessage());
+            }
         }
 
         return new WorkflowExecutionResult(

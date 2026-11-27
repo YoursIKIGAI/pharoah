@@ -1,6 +1,7 @@
 package com.pharoah.concurrency;
 
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Central Thread Pool and Scheduler Manager for PHAROAH.
@@ -18,6 +19,21 @@ public class ThreadPoolManager {
     private final int poolSize;
 
     /**
+     * Shared ThreadFactory creator for worker threads with customizable prefix.
+     */
+    public static ThreadFactory createWorkerThreadFactory(String prefix) {
+        return new ThreadFactory() {
+            private final AtomicInteger count = new AtomicInteger(1);
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, prefix + "-" + count.getAndIncrement());
+                t.setPriority(Thread.NORM_PRIORITY);
+                return t;
+            }
+        };
+    }
+
+    /**
      * Initializes the thread pools with a specified number of worker threads.
      *
      * @param workerCount Number of worker threads (e.g. Runtime.getRuntime().availableProcessors()).
@@ -25,16 +41,7 @@ public class ThreadPoolManager {
     public ThreadPoolManager(int workerCount) {
         this.poolSize = Math.max(2, workerCount);
 
-        // Custom ThreadFactory for identifiable thread names
-        ThreadFactory workerFactory = new ThreadFactory() {
-            private int count = 1;
-            @Override
-            public Thread newThread(Runnable r) {
-                Thread t = new Thread(r, "PHAROAH-WorkerPool-" + count++);
-                t.setPriority(Thread.NORM_PRIORITY);
-                return t;
-            }
-        };
+        ThreadFactory workerFactory = createWorkerThreadFactory("PHAROAH-WorkerPool");
 
         ThreadFactory schedulerFactory = new ThreadFactory() {
             private int count = 1;
