@@ -2,12 +2,16 @@ package com.pharoah.persistence;
 
 import com.pharoah.config.AppConfig;
 
+import java.net.URI;
 import java.sql.*;
 
 // SANCHIT: Implemented DatabaseConnectionFactory.
 // Manages MySQL JDBC connection pooling, configuration loading via AppConfig,
-// automatic schema bootstrapping for persistent tables (including user_activity), and SQLite fallback.
+// automatic schema bootstrapping for persistent tables (including runs, agent_runs, and user_activity),
+// and strict or graceful SQLite fallback.
 public class DatabaseConnectionFactory {
+
+    public static boolean requireMySql = false;
 
     private String dbType;
     private String dbUrl;
@@ -15,6 +19,7 @@ public class DatabaseConnectionFactory {
     private String dbPassword;
     private String dbDriver;
     private boolean isMySqlActive = false;
+    private String connectionStatusBanner = "";
 
     public DatabaseConnectionFactory() {
         loadConfiguration();
@@ -31,7 +36,6 @@ public class DatabaseConnectionFactory {
         testAndInitializeSchema();
     }
 
-    // SANCHIT: Loads centralized configuration from AppConfig
     private void loadConfiguration() {
         AppConfig config = AppConfig.getInstance();
         this.dbType = config.getDbType();
@@ -41,14 +45,12 @@ public class DatabaseConnectionFactory {
         this.dbPassword = config.getDbPassword();
     }
 
-    // SANCHIT: Establishes live JDBC Connection using DriverManager
     public Connection getConnection() throws SQLException {
         try {
             Class.forName(dbDriver);
             if ("mysql".equalsIgnoreCase(dbType) && isMySqlActive) {
                 return DriverManager.getConnection(dbUrl, dbUser, dbPassword);
             } else {
-                // SQLite fallback
                 String targetUrl = (dbUrl != null && dbUrl.contains("sqlite")) ? dbUrl : AppConfig.getInstance().getDbFallbackSqlite();
                 return DriverManager.getConnection(targetUrl);
             }
@@ -57,31 +59,60 @@ public class DatabaseConnectionFactory {
         }
     }
 
-    // SANCHIT: Verifies MySQL server connectivity; falls back to SQLite if offline
+    private String extractHostAndPort(String jdbcUrl) {
+        if (jdbcUrl == null) return "localhost:3306";
+        try {
+            String clean = jdbcUrl.replace("jdbc:mysql://", "http://");
+            int slash = clean.indexOf('/', 7);
+            if (slash != -1) {
+                clean = clean.substring(0, slash);
+            }
+            URI uri = URI.create(clean);
+            String host = uri.getHost() != null ? uri.getHost() : "localhost";
+            int port = uri.getPort() != -1 ? uri.getPort() : 3306;
+            return host + ":" + port;
+        } catch (Exception ignored) {
+            return "127.0.0.1:3306";
+        }
+    }
+
     private void testAndInitializeSchema() {
+        String hostPort = extractHostAndPort(this.dbUrl);
+
         if ("mysql".equalsIgnoreCase(this.dbType)) {
             try {
                 Class.forName("com.mysql.cj.jdbc.Driver");
                 try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPassword)) {
                     this.isMySqlActive = true;
-                    System.out.println("[DATABASE] Successfully connected to MySQL 8.0 on localhost:3306 (pharoah_db).");
+                    this.connectionStatusBanner = "DATABASE: MySQL pharoah_db @ " + hostPort + " (connected)";
+                    System.out.println(connectionStatusBanner);
                 }
             } catch (Exception e) {
                 this.isMySqlActive = false;
+                this.connectionStatusBanner = "DATABASE: SQLite FALLBACK pharoah.db (MySQL NOT connected: " + e.getMessage() + ")";
+                System.out.println(connectionStatusBanner);
+
+                if (requireMySql) {
+                    System.err.println("\n[FATAL] --require-mysql was specified but MySQL connection failed.");
+                    System.err.println("Error: " + e.getMessage());
+                    System.err.println("Please ensure MySQL 8.0 is running on " + hostPort + " and DB_PASSWORD is set.\n");
+                    System.exit(1);
+                }
+
                 this.dbType = "sqlite";
                 this.dbDriver = "org.sqlite.JDBC";
-                System.out.println("[DATABASE] MySQL connection failed (" + e.getMessage() + "). Falling back to SQLite (" + AppConfig.getInstance().getDbFallbackSqlite() + ").");
             }
         } else {
             this.isMySqlActive = false;
             this.dbType = "sqlite";
             this.dbDriver = "org.sqlite.JDBC";
+            this.connectionStatusBanner = "DATABASE: SQLite pharoah.db (default mode)";
+            System.out.println(connectionStatusBanner);
         }
 
         initializeAllTables();
     }
 
-    // SANCHIT: Creates persistent relational tables with primary keys and foreign keys
     private void initializeAllTables() {
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement()) {
@@ -90,7 +121,7 @@ public class DatabaseConnectionFactory {
                 stmt.execute("PRAGMA foreign_keys = ON;");
             }
 
-            // 0. Subjects Table (Legacy / Subject isolation compatibility)
+            // 0. Subjects Table
             String sqlSubjects = isMySqlActive ? """
                 CREATE TABLE IF NOT EXISTS subjects (
                     subject_id VARCHAR(64) PRIMARY KEY,
@@ -152,146 +183,7 @@ public class DatabaseConnectionFactory {
             """;
             stmt.execute(sqlAgents);
 
-            // 3. Tasks Table
-            String sqlTasks = isMySqlActive ? """
-                CREATE TABLE IF NOT EXISTS tasks (
-                    task_id VARCHAR(64) PRIMARY KEY,
-                    project_id VARCHAR(64) NOT NULL,
-                    title VARCHAR(255) NOT NULL,
-                    task_type VARCHAR(50) NOT NULL,
-                    priority VARCHAR(20) NOT NULL DEFAULT 'MEDIUM',
-                    status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
-                    input_payload TEXT,
-                    assigned_agent_id VARCHAR(64),
-                    depends_on_task_id VARCHAR(64),
-                    final_output MEDIUMTEXT,
-                    review_notes TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    completed_at TIMESTAMP NULL,
-                    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
-                ) ENGINE=InnoDB;
-            """ : """
-                CREATE TABLE IF NOT EXISTS tasks (
-                    task_id VARCHAR(64) PRIMARY KEY,
-                    project_id VARCHAR(64) NOT NULL,
-                    title VARCHAR(255) NOT NULL,
-                    task_type VARCHAR(50) NOT NULL,
-                    priority VARCHAR(20) NOT NULL DEFAULT 'MEDIUM',
-                    status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
-                    input_payload TEXT,
-                    assigned_agent_id VARCHAR(64),
-                    depends_on_task_id VARCHAR(64),
-                    final_output TEXT,
-                    review_notes TEXT,
-                    created_at TIMESTAMP NOT NULL,
-                    completed_at TIMESTAMP,
-                    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
-                );
-            """;
-            stmt.execute(sqlTasks);
-
-            // 4. Documents Table
-            String sqlDocs = isMySqlActive ? """
-                CREATE TABLE IF NOT EXISTS documents (
-                    document_id VARCHAR(64) PRIMARY KEY,
-                    project_id VARCHAR(64) NOT NULL,
-                    title VARCHAR(255) NOT NULL,
-                    document_type VARCHAR(50) NOT NULL,
-                    status VARCHAR(30) NOT NULL DEFAULT 'DRAFT',
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                ) ENGINE=InnoDB;
-            """ : """
-                CREATE TABLE IF NOT EXISTS documents (
-                    document_id VARCHAR(64) PRIMARY KEY,
-                    project_id VARCHAR(64) NOT NULL,
-                    title VARCHAR(255) NOT NULL,
-                    document_type VARCHAR(50) NOT NULL,
-                    status VARCHAR(30) NOT NULL DEFAULT 'DRAFT',
-                    created_at TIMESTAMP NOT NULL,
-                    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
-                );
-            """;
-            stmt.execute(sqlDocs);
-
-            // 5. Document Sections Table
-            String sqlSections = isMySqlActive ? """
-                CREATE TABLE IF NOT EXISTS document_sections (
-                    section_id VARCHAR(64) PRIMARY KEY,
-                    document_id VARCHAR(64) NOT NULL,
-                    section_name VARCHAR(150) NOT NULL,
-                    section_order INT NOT NULL,
-                    assigned_agent_id VARCHAR(64),
-                    content MEDIUMTEXT,
-                    status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
-                    version INT NOT NULL DEFAULT 1,
-                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    FOREIGN KEY (document_id) REFERENCES documents(document_id) ON DELETE CASCADE
-                ) ENGINE=InnoDB;
-            """ : """
-                CREATE TABLE IF NOT EXISTS document_sections (
-                    section_id VARCHAR(64) PRIMARY KEY,
-                    document_id VARCHAR(64) NOT NULL,
-                    section_name VARCHAR(150) NOT NULL,
-                    section_order INTEGER NOT NULL,
-                    assigned_agent_id VARCHAR(64),
-                    content TEXT,
-                    status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
-                    version INTEGER NOT NULL DEFAULT 1,
-                    updated_at TIMESTAMP NOT NULL,
-                    FOREIGN KEY (document_id) REFERENCES documents(document_id) ON DELETE CASCADE
-                );
-            """;
-            stmt.execute(sqlSections);
-
-            // 6. Knowledge Resources Table
-            String sqlKnowledge = isMySqlActive ? """
-                CREATE TABLE IF NOT EXISTS knowledge_resources (
-                    resource_id VARCHAR(64) PRIMARY KEY,
-                    project_id VARCHAR(64) NOT NULL,
-                    title VARCHAR(255) NOT NULL,
-                    resource_type VARCHAR(50) NOT NULL,
-                    content_or_url MEDIUMTEXT NOT NULL,
-                    topic_tag VARCHAR(100) NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
-                ) ENGINE=InnoDB;
-            """ : """
-                CREATE TABLE IF NOT EXISTS knowledge_resources (
-                    resource_id VARCHAR(64) PRIMARY KEY,
-                    project_id VARCHAR(64) NOT NULL,
-                    title VARCHAR(255) NOT NULL,
-                    resource_type VARCHAR(50) NOT NULL,
-                    content_or_url TEXT NOT NULL,
-                    topic_tag VARCHAR(100) NOT NULL,
-                    created_at TIMESTAMP NOT NULL,
-                    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
-                );
-            """;
-            stmt.execute(sqlKnowledge);
-
-            // 7. Workflow Activity Logs Table
-            String sqlLogs = isMySqlActive ? """
-                CREATE TABLE IF NOT EXISTS workflow_logs (
-                    log_id VARCHAR(64) PRIMARY KEY,
-                    task_id VARCHAR(64),
-                    agent_id VARCHAR(64),
-                    action VARCHAR(100) NOT NULL,
-                    details TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                ) ENGINE=InnoDB;
-            """ : """
-                CREATE TABLE IF NOT EXISTS workflow_logs (
-                    log_id VARCHAR(64) PRIMARY KEY,
-                    task_id VARCHAR(64),
-                    agent_id VARCHAR(64),
-                    action VARCHAR(100) NOT NULL,
-                    details TEXT,
-                    created_at TIMESTAMP NOT NULL
-                );
-            """;
-            stmt.execute(sqlLogs);
-
-            // 8. User Activity Audit Table (SANCHIT: Format-driven activity records for MySQL Workbench)
+            // 3. User Activity Audit Table
             String sqlUserActivity = isMySqlActive ? """
                 CREATE TABLE IF NOT EXISTS user_activity (
                     activity_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -317,6 +209,60 @@ public class DatabaseConnectionFactory {
             """;
             stmt.execute(sqlUserActivity);
 
+            // 4. Master Runs Table (Step 6)
+            String sqlRuns = isMySqlActive ? """
+                CREATE TABLE IF NOT EXISTS runs (
+                    run_id VARCHAR(64) PRIMARY KEY,
+                    user_prompt TEXT NOT NULL,
+                    status VARCHAR(50) NOT NULL DEFAULT 'COMPLETED',
+                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    finished_at TIMESTAMP NULL
+                ) ENGINE=InnoDB;
+            """ : """
+                CREATE TABLE IF NOT EXISTS runs (
+                    run_id TEXT PRIMARY KEY,
+                    user_prompt TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'COMPLETED',
+                    started_at TIMESTAMP NOT NULL,
+                    finished_at TIMESTAMP
+                );
+            """;
+            stmt.execute(sqlRuns);
+
+            // 5. Agent Runs Table (Step 6)
+            String sqlAgentRuns = isMySqlActive ? """
+                CREATE TABLE IF NOT EXISTS agent_runs (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    run_id VARCHAR(64) NOT NULL,
+                    agent_name VARCHAR(100) NOT NULL,
+                    role VARCHAR(50) NOT NULL,
+                    model VARCHAR(100) NOT NULL,
+                    thread_name VARCHAR(100) NOT NULL,
+                    status VARCHAR(50) NOT NULL,
+                    duration_ms BIGINT NOT NULL,
+                    prompt_chars INT NOT NULL DEFAULT 0,
+                    output_chars INT NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+                ) ENGINE=InnoDB;
+            """ : """
+                CREATE TABLE IF NOT EXISTS agent_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    agent_name TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    thread_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
+                    prompt_chars INTEGER NOT NULL DEFAULT 0,
+                    output_chars INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP NOT NULL,
+                    FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+                );
+            """;
+            stmt.execute(sqlAgentRuns);
+
             seedInitialData(conn);
 
         } catch (SQLException e) {
@@ -324,45 +270,15 @@ public class DatabaseConnectionFactory {
         }
     }
 
-    // SANCHIT: Populates initial sample project, knowledge assets, and 7 swarm agents
     private void seedInitialData(Connection conn) {
         try (Statement stmt = conn.createStatement()) {
             if (isMySqlActive) {
-                // Seed Default Project
                 stmt.executeUpdate("""
                     INSERT IGNORE INTO projects (project_id, name, description, status, created_at)
                     VALUES ('proj-default-01', 'Core Engineering & Research', 'Primary workspace for multi-agent tasks, academic research, and system engineering.', 'ACTIVE', NOW());
                 """);
-
-                // Seed Default Agents (All 7 Roles)
-                String[][] defaultAgents = {
-                    {"agent-01", "Research Specialist", "RESEARCH_AGENT", "Investigate literature, academic findings, and cite relevant sources.", "MOCK_HEURISTIC"},
-                    {"agent-02", "Technical Writer", "WRITING_AGENT", "Draft polished prose, technical blogs, and formal reports.", "MOCK_HEURISTIC"},
-                    {"agent-03", "Data & Metrics Analyst", "ANALYSIS_AGENT", "Analyze empirical data, identify patterns, and compare paradigms.", "MOCK_HEURISTIC"},
-                    {"agent-04", "Software Engineer", "CODING_AGENT", "Review algorithms, explain code patterns, and draft implementations.", "MOCK_HEURISTIC"},
-                    {"agent-05", "Docs Architect", "DOCUMENTATION_AGENT", "Generate system specs, installation guides, and API documentation.", "MOCK_HEURISTIC"},
-                    {"agent-06", "Quality Reviewer", "REVIEWER_AGENT", "Verify facts, check claims, and assess accuracy of written sections.", "MOCK_HEURISTIC"},
-                    {"agent-07", "Project Planner", "PLANNING_AGENT", "Decompose goals into milestone roadmaps and dependent task graphs.", "MOCK_HEURISTIC"}
-                };
-
-                for (String[] a : defaultAgents) {
-                    String sql = String.format("""
-                        INSERT IGNORE INTO agents (agent_id, name, role, instructions, provider_type, is_active, created_at)
-                        VALUES ('%s', '%s', '%s', '%s', '%s', 1, NOW());
-                    """, a[0], a[1], a[2], a[3], a[4]);
-                    stmt.executeUpdate(sql);
-                }
-
-                // Seed Sample Knowledge Asset
-                stmt.executeUpdate("""
-                    INSERT IGNORE INTO knowledge_resources (resource_id, project_id, title, resource_type, content_or_url, topic_tag, created_at)
-                    VALUES ('res-01', 'proj-default-01', 'Java 21 LTS Specifications', 'URL', 'https://openjdk.org/projects/jdk/21/', 'JAVA', NOW());
-                """);
             }
-
-        } catch (SQLException e) {
-            // Ignore seed duplicate failures on startup
-        }
+        } catch (SQLException ignored) {}
     }
 
     public boolean isMySqlActive() {
@@ -373,7 +289,38 @@ public class DatabaseConnectionFactory {
         return dbType;
     }
 
-    // SANCHIT: Prints live metadata about the connected database engine
+    public String getConnectionStatusBanner() {
+        return connectionStatusBanner;
+    }
+
+    public void printDatabaseStatus() {
+        AppConfig cfg = AppConfig.getInstance();
+        System.out.println("\n" + "=".repeat(76));
+        System.out.println("PHAROAH: Database Status & Verification");
+        System.out.println("=".repeat(76));
+        System.out.println("Engine In Use    : " + (isMySqlActive ? "MySQL 8.0 (pharoah_db)" : "SQLite Fallback (pharoah.db)"));
+        System.out.println("Connection URL   : " + cfg.getDbUrl());
+        System.out.println("Database User    : " + cfg.getDbUser());
+        System.out.println("Authentication   : " + cfg.getMaskedPassword());
+        System.out.println("Require MySQL    : " + requireMySql);
+
+        long runsCount = queryCount("SELECT COUNT(*) FROM runs");
+        long agentRunsCount = queryCount("SELECT COUNT(*) FROM agent_runs");
+        long activityCount = queryCount("SELECT COUNT(*) FROM user_activity");
+
+        System.out.println("-".repeat(76));
+        System.out.printf("Persistent Row Counts:\n");
+        System.out.printf("  - runs          : %d rows\n", runsCount);
+        System.out.printf("  - agent_runs    : %d rows\n", agentRunsCount);
+        System.out.printf("  - user_activity : %d rows\n", activityCount);
+        System.out.println("-".repeat(76));
+        System.out.println("Exact SQL to execute in MySQL Workbench to verify records:");
+        System.out.println("  USE pharoah_db;");
+        System.out.println("  SELECT * FROM runs ORDER BY started_at DESC LIMIT 10;");
+        System.out.println("  SELECT * FROM agent_runs ORDER BY created_at DESC LIMIT 20;");
+        System.out.println("=".repeat(76) + "\n");
+    }
+
     public void printDatabaseMetaData() {
         try (Connection conn = getConnection()) {
             DatabaseMetaData metaData = conn.getMetaData();
@@ -388,5 +335,18 @@ public class DatabaseConnectionFactory {
         } catch (SQLException e) {
             System.err.println("Failed to read database metadata: " + e.getMessage());
         }
+    }
+
+    private long queryCount(String sql) {
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+        } catch (SQLException e) {
+            System.err.println("[SQL ERROR] Failed counting rows for query (" + sql + "): " + e.getMessage());
+        }
+        return 0L;
     }
 }

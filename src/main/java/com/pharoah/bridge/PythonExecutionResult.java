@@ -2,7 +2,7 @@ package com.pharoah.bridge;
 
 import java.util.List;
 
-// VARIJ: Data container representing the result of a Python multi-agent swarm execution.
+// VARIJ: Data container representing the result of a Python multi-agent swarm or tool execution.
 public class PythonExecutionResult {
 
     private final boolean success;
@@ -13,6 +13,27 @@ public class PythonExecutionResult {
     private final List<String> agentsUsed;
     private final String outputFile;
     private final double elapsedSeconds;
+    private final String rawOutput;
+
+    public PythonExecutionResult(boolean success,
+                                 String status,
+                                 String topic,
+                                 String workflow,
+                                 List<String> sections,
+                                 List<String> agentsUsed,
+                                 String outputFile,
+                                 double elapsedSeconds,
+                                 String rawOutput) {
+        this.success = success;
+        this.status = status;
+        this.topic = topic;
+        this.workflow = workflow;
+        this.sections = sections;
+        this.agentsUsed = agentsUsed;
+        this.outputFile = outputFile;
+        this.elapsedSeconds = elapsedSeconds;
+        this.rawOutput = rawOutput != null ? rawOutput : "";
+    }
 
     public PythonExecutionResult(boolean success,
                                  String status,
@@ -22,14 +43,7 @@ public class PythonExecutionResult {
                                  List<String> agentsUsed,
                                  String outputFile,
                                  double elapsedSeconds) {
-        this.success = success;
-        this.status = status;
-        this.topic = topic;
-        this.workflow = workflow;
-        this.sections = sections;
-        this.agentsUsed = agentsUsed;
-        this.outputFile = outputFile;
-        this.elapsedSeconds = elapsedSeconds;
+        this(success, status, topic, workflow, sections, agentsUsed, outputFile, elapsedSeconds, "");
     }
 
     public boolean isSuccess() {
@@ -66,6 +80,10 @@ public class PythonExecutionResult {
 
     public double getElapsedSeconds() {
         return elapsedSeconds;
+    }
+
+    public String getRawOutput() {
+        return rawOutput;
     }
 
     @Override

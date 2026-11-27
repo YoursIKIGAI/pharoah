@@ -40,6 +40,13 @@
             <version>3.0.1</version>
         </dependency>
 
+        <!-- org.json for real JSON parsing -->
+        <dependency>
+            <groupId>org.json</groupId>
+            <artifactId>json</artifactId>
+            <version>20240303</version>
+        </dependency>
+
         <!-- JUnit 5 for Unit Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

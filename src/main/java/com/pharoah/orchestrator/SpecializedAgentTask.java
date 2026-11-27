@@ -1,23 +1,49 @@
 package com.pharoah.orchestrator;
 
+import com.pharoah.bridge.PythonAgentBridge;
+import com.pharoah.llm.LlmClient;
+import com.pharoah.llm.MockLlmClient;
+import com.pharoah.llm.PromptLoader;
+
 import java.util.Collections;
 import java.util.concurrent.Callable;
 
 // VARIJ: Concurrent task unit executed by worker threads in the ExecutorService.
-// Synthesizes dynamic, multi-paragraph academic prose for the assigned topic and sub-topics
-// and publishes thread-safe outputs to the WorkflowContext.
+// Builds dynamic prompts from (role system prompt + task + dependsOn upstream outputs)
+// and invokes LlmClient (or Python smolagents tool agent when --tools is enabled).
 public class SpecializedAgentTask implements Callable<AgentOutput> {
 
     private final AgentDeployment deployment;
     private final String topic;
     private final WorkflowContext context;
+    private final LlmClient llmClient;
+    private final PythonAgentBridge toolBridge;
+    private final boolean useTools;
     private final long simulatedWorkDurationMs;
+
+    public SpecializedAgentTask(AgentDeployment deployment,
+                                String topic,
+                                WorkflowContext context,
+                                LlmClient llmClient,
+                                PythonAgentBridge toolBridge,
+                                boolean useTools) {
+        this.deployment = deployment;
+        this.topic = topic;
+        this.context = context;
+        this.llmClient = llmClient != null ? llmClient : new MockLlmClient();
+        this.toolBridge = toolBridge;
+        this.useTools = useTools;
+        this.simulatedWorkDurationMs = 0;
+    }
 
     public SpecializedAgentTask(AgentDeployment deployment, String topic, WorkflowContext context, long simulatedWorkDurationMs) {
         this.deployment = deployment;
         this.topic = topic;
         this.context = context;
-        this.simulatedWorkDurationMs = Math.max(100, simulatedWorkDurationMs);
+        this.llmClient = new MockLlmClient();
+        this.toolBridge = null;
+        this.useTools = false;
+        this.simulatedWorkDurationMs = Math.max(0, simulatedWorkDurationMs);
     }
 
     @Override
@@ -27,23 +53,48 @@ public class SpecializedAgentTask implements Callable<AgentOutput> {
         deployment.setAssignedThreadName(threadName);
 
         try {
-            // Retrieve upstream findings if any dependencies exist
+            // 1. Retrieve upstream findings from completed dependencies
             String upstreamData = context.getUpstreamSynthesis(deployment.getDependencies());
 
-            // Real asynchronous computational processing pace
+            // 2. Load system prompt for this agent's specific role from resources/prompts/<role>.txt
+            String roleName = (deployment.getRole() != null && !deployment.getRole().isBlank()) 
+                    ? deployment.getRole().toLowerCase() : "researcher";
+            String systemPrompt = PromptLoader.loadPrompt(roleName);
+
+            // 3. Construct user prompt combining topic, task, and upstream outputs
+            StringBuilder userPromptBuilder = new StringBuilder();
+            userPromptBuilder.append("OVERALL TOPIC: ").append(topic).append("\n\n");
+            userPromptBuilder.append("YOUR ASSIGNED TASK: ").append(deployment.getResponsibility()).append("\n\n");
+            if (upstreamData != null && !upstreamData.isBlank() && !upstreamData.startsWith("No prior")) {
+                userPromptBuilder.append("SYNTHESIZED UPSTREAM AGENT FINDINGS (Build directly upon these):\n")
+                                 .append(upstreamData).append("\n\n");
+            }
+            userPromptBuilder.append("Generate a comprehensive, rigorous, and logically structured analysis for your section.");
+
             if (simulatedWorkDurationMs > 0) {
                 Thread.sleep(simulatedWorkDurationMs);
             }
 
-            // Synthesize dynamic, in-depth academic prose tailored to kind & sub-topics
-            String synthesizedProse = AgentContentSynthesizer.synthesize(deployment, upstreamData);
+            String content;
+            // 4. Step 4: Tool-using agent in Python if enabled and role is researcher
+            if (useTools && toolBridge != null && "researcher".equalsIgnoreCase(roleName)) {
+                System.out.printf("  [TOOL] Agent %s is utilizing Python smolagents with web search...\n", deployment.getName());
+                content = toolBridge.runToolAgent(topic, deployment.getResponsibility(), llmClient.getModelName(), "http://localhost:11434", llmClient.isMock());
+            } else {
+                // Real LLM call
+                content = llmClient.chat(systemPrompt, userPromptBuilder.toString());
+            }
+
+            if (llmClient.isMock() && !content.startsWith("[MOCK]")) {
+                content = "[MOCK] " + content;
+            }
 
             long duration = System.currentTimeMillis() - startTime;
             AgentOutput output = new AgentOutput(
                     deployment.getId(),
                     deployment.getName(),
                     deployment.getResponsibility(),
-                    synthesizedProse,
+                    content,
                     Collections.emptyList(),
                     duration,
                     threadName
@@ -61,7 +112,6 @@ public class SpecializedAgentTask implements Callable<AgentOutput> {
             context.recordOutput(deployment.getId(), failure);
             return failure;
         } catch (Throwable t) {
-            // VARIJ: Catch all Throwables (Errors, RuntimeExceptions) to prevent workflow deadlock
             long duration = System.currentTimeMillis() - startTime;
             AgentOutput failure = AgentOutput.failure(deployment.getId(), deployment.getName(), deployment.getResponsibility(),
                     "Execution error: " + t.getMessage(), duration);

@@ -8,7 +8,7 @@ import java.io.InputStreamReader;
 import java.util.Properties;
 
 // SANCHIT & VARIJ: Centralized Configuration Manager.
-// Loads system configuration strictly from environment variables (DB_URL, DB_USER, DB_PASSWORD)
+// Loads system configuration strictly from environment variables (DB_URL, DB_USER, DB_PASSWORD, LLM_*)
 // with non-secret properties from config.properties as fallback. Sensitive credentials are never read from files.
 public class AppConfig {
 
@@ -22,6 +22,15 @@ public class AppConfig {
     private final String dbFallbackSqlite;
     private final String pythonCommand;
     private final boolean ansiColorsEnabled;
+
+    // LLM Configuration
+    private final String llmProvider;
+    private final String llmBaseUrl;
+    private final String llmModel;
+    private final int llmTimeoutSeconds;
+    private final int llmMaxConcurrent;
+
+    // Legacy AI compatibility fields
     private final String aiProvider;
     private final String aiEndpoint;
 
@@ -29,7 +38,6 @@ public class AppConfig {
         Properties props = loadProperties();
 
         // 1. Database Configuration: credentials resolved ONLY from environment variables (DB_URL, DB_USER, DB_PASSWORD)
-        // Non-secret defaults/fallbacks come from config.properties. dbPassword NEVER falls back to properties.
         this.dbType = getEnvOrProp("DB_TYPE", props, "db.type", "mysql");
         this.dbDriver = getEnvOrProp("DB_DRIVER", props, "db.driver", "com.mysql.cj.jdbc.Driver");
         this.dbUrl = getEnvOrProp("DB_URL", "MYSQL_URL", props, "db.url",
@@ -45,9 +53,28 @@ public class AppConfig {
         String ansiVal = getEnvOrProp("UI_ANSI", props, "ui.ansi.colors", "true");
         this.ansiColorsEnabled = Boolean.parseBoolean(ansiVal);
 
-        // 4. Pluggable AI Configuration
-        this.aiProvider = getEnvOrProp("AI_PROVIDER", props, "ai.provider", "MOCK_HEURISTIC");
-        this.aiEndpoint = getEnvOrProp("AI_ENDPOINT", props, "ai.endpoint", "http://localhost:11434/api/generate");
+        // 4. Real Local Open-Source LLM Configuration
+        this.llmProvider = getEnvOrProp("LLM_PROVIDER", props, "llm.provider", "ollama");
+        this.llmBaseUrl = getEnvOrProp("LLM_BASE_URL", "OLLAMA_BASE_URL", props, "llm.baseUrl", "http://localhost:11434");
+        this.llmModel = getEnvOrProp("LLM_MODEL", "OLLAMA_MODEL", props, "llm.model", "llama3.1:8b");
+        
+        String timeoutStr = getEnvOrProp("LLM_TIMEOUT", props, "llm.timeout", "180");
+        int parsedTimeout = 180;
+        try {
+            parsedTimeout = Integer.parseInt(timeoutStr);
+        } catch (NumberFormatException ignored) {}
+        this.llmTimeoutSeconds = parsedTimeout;
+
+        String maxConcStr = getEnvOrProp("LLM_MAX_CONCURRENT", props, "llm.maxConcurrent", "2");
+        int parsedConc = 2;
+        try {
+            parsedConc = Integer.parseInt(maxConcStr);
+        } catch (NumberFormatException ignored) {}
+        this.llmMaxConcurrent = Math.max(1, parsedConc);
+
+        // Legacy compatibility
+        this.aiProvider = this.llmProvider;
+        this.aiEndpoint = this.llmBaseUrl + "/api/generate";
     }
 
     private String resolveDbPassword() {
@@ -94,7 +121,6 @@ public class AppConfig {
     private Properties loadProperties() {
         Properties props = new Properties();
 
-        // Try config.properties on disk
         File configFile = new File("config.properties");
         if (configFile.exists()) {
             try (InputStream is = new FileInputStream(configFile)) {
@@ -103,7 +129,6 @@ public class AppConfig {
             } catch (Exception ignored) {}
         }
 
-        // Try db.properties on disk (backwards compatibility)
         File dbPropFile = new File("db.properties");
         if (dbPropFile.exists()) {
             try (InputStream is = new FileInputStream(dbPropFile)) {
@@ -112,7 +137,6 @@ public class AppConfig {
             } catch (Exception ignored) {}
         }
 
-        // Try classpath resource
         try (InputStream is = getClass().getClassLoader().getResourceAsStream("config.properties")) {
             if (is != null) {
                 props.load(is);
@@ -170,6 +194,26 @@ public class AppConfig {
 
     public boolean isAnsiColorsEnabled() {
         return ansiColorsEnabled;
+    }
+
+    public String getLlmProvider() {
+        return llmProvider;
+    }
+
+    public String getLlmBaseUrl() {
+        return llmBaseUrl;
+    }
+
+    public String getLlmModel() {
+        return llmModel;
+    }
+
+    public int getLlmTimeoutSeconds() {
+        return llmTimeoutSeconds;
+    }
+
+    public int getLlmMaxConcurrent() {
+        return llmMaxConcurrent;
     }
 
     public String getAiProvider() {

@@ -10,10 +10,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
-// VARIJ & ASHUTOSH: Robust ProcessBuilder Bridge to Python Multi-Agent Swarm.
-// Resolves python/main.py from project root, enforces UTF-8 unbuffered subprocess execution,
+// VARIJ & ASHUTOSH: Robust ProcessBuilder Bridge to Python Multi-Agent Swarm and smolagents tool agent.
+// Resolves scripts from project root, enforces UTF-8 unbuffered subprocess execution,
 // drains stderr on a dedicated thread, implements hard timeout process termination,
-// and parses the JSON outcome with RFC 8259 SimpleJsonParser without regex.
+// and parses structured outcomes with RFC 8259 SimpleJsonParser without regex.
 public class PythonAgentBridge {
 
     private final String pythonExecutable;
@@ -48,12 +48,15 @@ public class PythonAgentBridge {
         this(customPythonPath, 300L);
     }
 
-    // Resolves project root by verifying python/main.py existence upwards
     private static File resolveProjectRoot() {
         File current = new File(".").getAbsoluteFile();
         while (current != null) {
-            File testScript = new File(current, "python" + File.separator + "main.py");
+            File testScript = new File(current, "python" + File.separator + "tool_agent.py");
             if (testScript.exists()) {
+                return current;
+            }
+            File mainPy = new File(current, "python" + File.separator + "main.py");
+            if (mainPy.exists()) {
                 return current;
             }
             File pom = new File(current, "pom.xml");
@@ -111,6 +114,35 @@ public class PythonAgentBridge {
         }
 
         return executeProcess(command, topic, workflow);
+    }
+
+    // Step 4: Invokes Python smolagents tool-using agent for researcher role when --tools is enabled
+    public String runToolAgent(String topic, String task, String model, String baseUrl, boolean isMock) throws Exception {
+        File toolScript = new File(projectRoot, "python" + File.separator + "tool_agent.py");
+        if (!toolScript.exists()) {
+            throw new IllegalStateException("Tool agent script missing at " + toolScript.getAbsolutePath());
+        }
+
+        List<String> command = new ArrayList<>();
+        command.add(pythonExecutable);
+        command.add(toolScript.getAbsolutePath());
+        command.add("--topic");
+        command.add(topic != null ? topic : "General Topic");
+        command.add("--task");
+        command.add(task != null ? task : "Conduct research with web search");
+        command.add("--model");
+        command.add(model != null ? model : "llama3.1:8b");
+        command.add("--base-url");
+        command.add(baseUrl != null ? baseUrl : "http://localhost:11434");
+        if (isMock) {
+            command.add("--mock");
+        }
+
+        PythonExecutionResult res = executeProcess(command, topic, "tool_agent");
+        if (!res.isSuccess() && !res.getStatus().equalsIgnoreCase("COMPLETED")) {
+            throw new IllegalStateException("Python tool agent failed: " + res.getStatus());
+        }
+        return !res.getRawOutput().isBlank() ? res.getRawOutput() : res.getOutputFile();
     }
 
     // Executes process with proper environment, stderr draining, and timeout management
@@ -226,6 +258,7 @@ public class PythonAgentBridge {
             String topic = String.valueOf(map.getOrDefault("topic", fallbackTopic));
             String workflow = String.valueOf(map.getOrDefault("workflow", fallbackWorkflow));
             String outputFile = String.valueOf(map.getOrDefault("output_file", ""));
+            String outputContent = String.valueOf(map.getOrDefault("output", ""));
 
             double elapsed = 0.0;
             Object elapsedObj = map.get("elapsed_seconds");
@@ -253,7 +286,7 @@ public class PythonAgentBridge {
                 }
             }
 
-            return new PythonExecutionResult(true, status, topic, workflow, sections, agents, outputFile, elapsed);
+            return new PythonExecutionResult(true, status, topic, workflow, sections, agents, outputFile, elapsed, outputContent);
 
         } catch (Exception e) {
             System.err.println("  [!] Failed to parse Python JSON output: " + e.getMessage());
