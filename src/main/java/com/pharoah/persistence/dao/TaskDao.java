@@ -78,11 +78,9 @@ public class TaskDao {
         }
     }
 
-    public Task findById(String taskId) throws SQLException {
+    public Task findById(String taskId, Connection conn) throws SQLException {
         String sql = "SELECT * FROM tasks WHERE task_id = ?";
-        try (Connection conn = connectionFactory.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, taskId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
@@ -93,12 +91,16 @@ public class TaskDao {
         return null;
     }
 
-    public List<Task> findByProject(String projectId) throws SQLException {
+    public Task findById(String taskId) throws SQLException {
+        try (Connection conn = connectionFactory.getConnection()) {
+            return findById(taskId, conn);
+        }
+    }
+
+    public List<Task> findByProject(String projectId, Connection conn) throws SQLException {
         String sql = "SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at ASC";
         List<Task> list = new ArrayList<>();
-        try (Connection conn = connectionFactory.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, projectId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -109,13 +111,17 @@ public class TaskDao {
         return list;
     }
 
-    public List<Task> findAll() throws SQLException {
+    public List<Task> findByProject(String projectId) throws SQLException {
+        try (Connection conn = connectionFactory.getConnection()) {
+            return findByProject(projectId, conn);
+        }
+    }
+
+    public List<Task> findAll(Connection conn) throws SQLException {
         String sql = "SELECT * FROM tasks ORDER BY created_at DESC";
         List<Task> list = new ArrayList<>();
-        try (Connection conn = connectionFactory.getConnection();
-             Statement stmt = conn.createStatement();
+        try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
-
             while (rs.next()) {
                 list.add(mapRowToTask(rs));
             }
@@ -123,13 +129,23 @@ public class TaskDao {
         return list;
     }
 
-    public boolean delete(String taskId) throws SQLException {
-        String sql = "DELETE FROM tasks WHERE task_id = ?";
-        try (Connection conn = connectionFactory.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+    public List<Task> findAll() throws SQLException {
+        try (Connection conn = connectionFactory.getConnection()) {
+            return findAll(conn);
+        }
+    }
 
+    public boolean delete(String taskId, Connection conn) throws SQLException {
+        String sql = "DELETE FROM tasks WHERE task_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, taskId);
             return ps.executeUpdate() > 0;
+        }
+    }
+
+    public boolean delete(String taskId) throws SQLException {
+        try (Connection conn = connectionFactory.getConnection()) {
+            return delete(taskId, conn);
         }
     }
 

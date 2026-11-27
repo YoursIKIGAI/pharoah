@@ -1,6 +1,6 @@
 package com.pharoah.app;
 
-import com.pharoah.agent.AgentService;
+import com.pharoah.agents.AgentService;
 import com.pharoah.ai.AIService;
 import com.pharoah.ai.RemoteHttpAIService;
 import com.pharoah.analytics.TaskAnalyticsEngine;

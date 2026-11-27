@@ -2,12 +2,16 @@ package com.pharoah.persistence;
 
 import com.pharoah.config.AppConfig;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.sql.*;
 
-// SANCHIT: Implemented DatabaseConnectionFactory.
+// SANCHIT & VARIJ: Implemented DatabaseConnectionFactory.
 // Manages MySQL JDBC connection pooling, configuration loading via AppConfig,
-// automatic schema bootstrapping for persistent tables (including runs, agent_runs, and user_activity),
+// automatic schema bootstrapping directly from database/schema.sql on startup,
 // and strict or graceful SQLite fallback.
 public class DatabaseConnectionFactory {
 
@@ -114,159 +118,169 @@ public class DatabaseConnectionFactory {
     }
 
     private void initializeAllTables() {
-        try (Connection conn = getConnection();
-             Statement stmt = conn.createStatement()) {
-
-            if (!isMySqlActive) {
-                stmt.execute("PRAGMA foreign_keys = ON;");
+        try (Connection conn = getConnection()) {
+            if (isMySqlActive) {
+                applySchemaScript(conn, new File("database/schema.sql"));
+            } else {
+                applySqliteSchema(conn);
             }
-
-            // 0. Subjects Table
-            String sqlSubjects = isMySqlActive ? """
-                CREATE TABLE IF NOT EXISTS subjects (
-                    subject_id VARCHAR(64) PRIMARY KEY,
-                    name VARCHAR(150) NOT NULL UNIQUE,
-                    description TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                ) ENGINE=InnoDB;
-            """ : """
-                CREATE TABLE IF NOT EXISTS subjects (
-                    subject_id VARCHAR(64) PRIMARY KEY,
-                    name VARCHAR(150) NOT NULL UNIQUE,
-                    description TEXT,
-                    created_at TIMESTAMP NOT NULL
-                );
-            """;
-            stmt.execute(sqlSubjects);
-
-            // 1. Projects Table
-            String sqlProjects = isMySqlActive ? """
-                CREATE TABLE IF NOT EXISTS projects (
-                    project_id VARCHAR(64) PRIMARY KEY,
-                    name VARCHAR(150) NOT NULL UNIQUE,
-                    description TEXT,
-                    status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                ) ENGINE=InnoDB;
-            """ : """
-                CREATE TABLE IF NOT EXISTS projects (
-                    project_id VARCHAR(64) PRIMARY KEY,
-                    name VARCHAR(150) NOT NULL UNIQUE,
-                    description TEXT,
-                    status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
-                    created_at TIMESTAMP NOT NULL
-                );
-            """;
-            stmt.execute(sqlProjects);
-
-            // 2. Agents Registry Table
-            String sqlAgents = isMySqlActive ? """
-                CREATE TABLE IF NOT EXISTS agents (
-                    agent_id VARCHAR(64) PRIMARY KEY,
-                    name VARCHAR(100) NOT NULL UNIQUE,
-                    role VARCHAR(50) NOT NULL,
-                    instructions TEXT,
-                    provider_type VARCHAR(50) NOT NULL DEFAULT 'MOCK_HEURISTIC',
-                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                ) ENGINE=InnoDB;
-            """ : """
-                CREATE TABLE IF NOT EXISTS agents (
-                    agent_id VARCHAR(64) PRIMARY KEY,
-                    name VARCHAR(100) NOT NULL UNIQUE,
-                    role VARCHAR(50) NOT NULL,
-                    instructions TEXT,
-                    provider_type VARCHAR(50) NOT NULL DEFAULT 'MOCK_HEURISTIC',
-                    is_active BOOLEAN NOT NULL DEFAULT 1,
-                    created_at TIMESTAMP NOT NULL
-                );
-            """;
-            stmt.execute(sqlAgents);
-
-            // 3. User Activity Audit Table
-            String sqlUserActivity = isMySqlActive ? """
-                CREATE TABLE IF NOT EXISTS user_activity (
-                    activity_id INT AUTO_INCREMENT PRIMARY KEY,
-                    user_name VARCHAR(100) NOT NULL,
-                    topic VARCHAR(255) NOT NULL,
-                    workflow_type VARCHAR(100) NOT NULL,
-                    sections_worked TEXT NOT NULL,
-                    agents_used TEXT NOT NULL,
-                    status VARCHAR(50) NOT NULL DEFAULT 'COMPLETED',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                ) ENGINE=InnoDB;
-            """ : """
-                CREATE TABLE IF NOT EXISTS user_activity (
-                    activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_name TEXT NOT NULL,
-                    topic TEXT NOT NULL,
-                    workflow_type TEXT NOT NULL,
-                    sections_worked TEXT NOT NULL,
-                    agents_used TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'COMPLETED',
-                    created_at TIMESTAMP NOT NULL
-                );
-            """;
-            stmt.execute(sqlUserActivity);
-
-            // 4. Master Runs Table (Step 6)
-            String sqlRuns = isMySqlActive ? """
-                CREATE TABLE IF NOT EXISTS runs (
-                    run_id VARCHAR(64) PRIMARY KEY,
-                    user_prompt TEXT NOT NULL,
-                    status VARCHAR(50) NOT NULL DEFAULT 'COMPLETED',
-                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    finished_at TIMESTAMP NULL
-                ) ENGINE=InnoDB;
-            """ : """
-                CREATE TABLE IF NOT EXISTS runs (
-                    run_id TEXT PRIMARY KEY,
-                    user_prompt TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'COMPLETED',
-                    started_at TIMESTAMP NOT NULL,
-                    finished_at TIMESTAMP
-                );
-            """;
-            stmt.execute(sqlRuns);
-
-            // 5. Agent Runs Table (Step 6)
-            String sqlAgentRuns = isMySqlActive ? """
-                CREATE TABLE IF NOT EXISTS agent_runs (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    run_id VARCHAR(64) NOT NULL,
-                    agent_name VARCHAR(100) NOT NULL,
-                    role VARCHAR(50) NOT NULL,
-                    model VARCHAR(100) NOT NULL,
-                    thread_name VARCHAR(100) NOT NULL,
-                    status VARCHAR(50) NOT NULL,
-                    duration_ms BIGINT NOT NULL,
-                    prompt_chars INT NOT NULL DEFAULT 0,
-                    output_chars INT NOT NULL DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
-                ) ENGINE=InnoDB;
-            """ : """
-                CREATE TABLE IF NOT EXISTS agent_runs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL,
-                    agent_name TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    thread_name TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    duration_ms INTEGER NOT NULL,
-                    prompt_chars INTEGER NOT NULL DEFAULT 0,
-                    output_chars INTEGER NOT NULL DEFAULT 0,
-                    created_at TIMESTAMP NOT NULL,
-                    FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
-                );
-            """;
-            stmt.execute(sqlAgentRuns);
-
             seedInitialData(conn);
-
         } catch (SQLException e) {
             System.err.println("[SCHEMA ERROR] Failed to initialize database tables: " + e.getMessage());
+        }
+    }
+
+    private void applySchemaScript(Connection conn, File sqlFile) {
+        if (!sqlFile.exists()) {
+            System.err.println("[SCHEMA WARNING] schema.sql not found at " + sqlFile.getAbsolutePath());
+            return;
+        }
+        try (BufferedReader reader = new BufferedReader(new FileReader(sqlFile, StandardCharsets.UTF_8));
+             Statement stmt = conn.createStatement()) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("--") || trimmed.startsWith("#") || trimmed.isEmpty()) {
+                    continue;
+                }
+                sb.append(line).append(" ");
+                if (trimmed.endsWith(";")) {
+                    String statementSql = sb.toString().trim();
+                    if (statementSql.endsWith(";")) {
+                        statementSql = statementSql.substring(0, statementSql.length() - 1).trim();
+                    }
+                    if (!statementSql.isEmpty()) {
+                        try {
+                            stmt.execute(statementSql);
+                        } catch (SQLException ex) {
+                            if (!ex.getMessage().toLowerCase().contains("already exists")) {
+                                System.err.printf("[SCHEMA NOTICE] %s\n", ex.getMessage());
+                            }
+                        }
+                    }
+                    sb.setLength(0);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[SCHEMA ERROR] Error executing schema.sql: " + e.getMessage());
+        }
+    }
+
+    private void applySqliteSchema(Connection conn) {
+        String[] sqliteTables = {
+            "PRAGMA foreign_keys = ON;",
+            """
+            CREATE TABLE IF NOT EXISTS subjects (
+                subject_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                created_at TIMESTAMP NOT NULL
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+                project_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                status TEXT NOT NULL DEFAULT 'ACTIVE',
+                created_at TIMESTAMP NOT NULL
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS agents (
+                agent_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                role TEXT NOT NULL,
+                instructions TEXT,
+                provider_type TEXT NOT NULL DEFAULT 'MOCK_HEURISTIC',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP NOT NULL
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+                task_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                task_type TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                input_payload TEXT,
+                assigned_agent_id TEXT,
+                depends_on_task_id TEXT,
+                final_output TEXT,
+                review_notes TEXT,
+                created_at TIMESTAMP NOT NULL,
+                completed_at TIMESTAMP
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS knowledge_resources (
+                resource_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                resource_type TEXT NOT NULL,
+                uri_or_path TEXT NOT NULL,
+                tags TEXT,
+                created_at TIMESTAMP NOT NULL
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS documents (
+                document_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                document_type TEXT NOT NULL,
+                target_path TEXT,
+                created_at TIMESTAMP NOT NULL
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS user_activity (
+                activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_name TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                workflow_type TEXT NOT NULL,
+                sections_worked TEXT NOT NULL,
+                agents_used TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'COMPLETED',
+                created_at TIMESTAMP NOT NULL
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS runs (
+                run_id TEXT PRIMARY KEY,
+                user_prompt TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'COMPLETED',
+                started_at TIMESTAMP NOT NULL,
+                finished_at TIMESTAMP
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                agent_name TEXT NOT NULL,
+                role TEXT NOT NULL,
+                model TEXT NOT NULL,
+                thread_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                prompt_chars INTEGER NOT NULL DEFAULT 0,
+                output_chars INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+            );
+            """
+        };
+
+        try (Statement stmt = conn.createStatement()) {
+            for (String sql : sqliteTables) {
+                stmt.execute(sql);
+            }
+        } catch (SQLException ex) {
+            System.err.println("[SQLITE SCHEMA ERROR] " + ex.getMessage());
         }
     }
 
@@ -299,8 +313,11 @@ public class DatabaseConnectionFactory {
         System.out.println("PHAROAH: Database Status & Verification");
         System.out.println("=".repeat(76));
         System.out.println("Engine In Use    : " + (isMySqlActive ? "MySQL 8.0 (pharoah_db)" : "SQLite Fallback (pharoah.db)"));
+        System.out.println("Host             : 127.0.0.1 (localhost)");
+        System.out.println("Port             : 3306");
+        System.out.println("Database / Schema: pharoah_db");
+        System.out.println("Username         : " + cfg.getDbUser());
         System.out.println("Connection URL   : " + cfg.getDbUrl());
-        System.out.println("Database User    : " + cfg.getDbUser());
         System.out.println("Authentication   : " + cfg.getMaskedPassword());
         System.out.println("Require MySQL    : " + requireMySql);
 

@@ -3,7 +3,7 @@ package com.pharoah;
 import com.pharoah.core.enums.Priority;
 import com.pharoah.core.enums.TaskType;
 import com.pharoah.core.model.Task;
-import com.pharoah.documents.DocumentFileProcessor;
+import com.pharoah.document.DocumentFileProcessor;
 import com.pharoah.knowledge.SubjectContextManager;
 import com.pharoah.knowledge.SubjectMemory;
 import com.pharoah.persistence.repository.InMemoryGenericRepository;

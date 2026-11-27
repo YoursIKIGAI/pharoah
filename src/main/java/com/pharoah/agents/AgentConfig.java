@@ -1,4 +1,4 @@
-package com.pharoah.agent;
+package com.pharoah.agents;
 
 import java.time.LocalDateTime;
 import java.util.Objects;

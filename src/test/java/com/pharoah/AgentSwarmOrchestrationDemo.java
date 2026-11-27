@@ -1,8 +1,8 @@
 package com.pharoah;
 
-import com.pharoah.agent.AgentConfig;
-import com.pharoah.agent.AgentRole;
-import com.pharoah.agent.AgentService;
+import com.pharoah.agents.AgentConfig;
+import com.pharoah.agents.AgentRole;
+import com.pharoah.agents.AgentService;
 import com.pharoah.ai.AIService;
 import com.pharoah.ai.OfflineHeuristicAIService;
 import com.pharoah.concurrency.ThreadPoolManager;

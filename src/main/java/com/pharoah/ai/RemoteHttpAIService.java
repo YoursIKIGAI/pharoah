@@ -21,9 +21,14 @@ public class RemoteHttpAIService implements AIService {
     private final String endpointUrl;
     private final HttpClient httpClient;
     private final AIService fallbackService;
+    private boolean warnedMissingKey = false;
 
     public RemoteHttpAIService(String apiKey, String endpointUrl) {
-        this.apiKey = apiKey;
+        String key = apiKey;
+        if (key == null || key.isBlank()) {
+            key = System.getenv("GEMINI_API_KEY");
+        }
+        this.apiKey = key;
         this.endpointUrl = (endpointUrl != null) ? endpointUrl : "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
@@ -36,7 +41,14 @@ public class RemoteHttpAIService implements AIService {
     }
 
     private boolean isCloudApiAvailable() {
-        return apiKey != null && !apiKey.trim().isEmpty();
+        if (apiKey != null && !apiKey.trim().isEmpty()) {
+            return true;
+        }
+        if (!warnedMissingKey) {
+            System.err.println("[AI WARNING] No LLM API key configured (PHAROAH_API_KEY or GEMINI_API_KEY is unset). Cleanly falling back to OfflineHeuristicAIService.");
+            warnedMissingKey = true;
+        }
+        return false;
     }
 
     @Override
@@ -123,11 +135,11 @@ public class RemoteHttpAIService implements AIService {
             if (response.statusCode() == 200) {
                 return response.body();
             } else {
-                System.err.printf("[HTTP API ERROR] Cloud API returned status %d. Falling back to offline engine.\n", response.statusCode());
+                System.err.printf("[AI WARNING] Cloud API returned status %d. Cleanly falling back to OfflineHeuristicAIService.\n", response.statusCode());
                 return fallbackService.generateWriting(prompt, "Academic", "Fallback");
             }
         } catch (Exception e) {
-            System.err.printf("[HTTP CLIENT EXCEPTION] %s. Falling back to offline heuristic engine.\n", e.getMessage());
+            System.err.printf("[AI WARNING] Cloud API call failed: %s. Cleanly falling back to OfflineHeuristicAIService.\n", e.getMessage());
             return fallbackService.generateWriting(prompt, "Academic", "Fallback");
         }
     }

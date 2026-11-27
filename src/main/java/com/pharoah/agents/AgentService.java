@@ -1,4 +1,4 @@
-package com.pharoah.agent;
+package com.pharoah.agents;
 
 import com.pharoah.persistence.dao.AgentDao;
 

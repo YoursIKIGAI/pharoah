@@ -5,21 +5,21 @@ import com.pharoah.core.enums.TaskStatus;
 import com.pharoah.core.enums.TaskType;
 import com.pharoah.core.model.Task;
 import com.pharoah.core.model.TaskResult;
+import com.pharoah.persistence.dao.TaskDao;
 
+import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Central Task Manager for PHAROAH.
  * 
- * Demonstrates practical usage of Java Collections Framework:
- * 1. ArrayList: Dynamic ordered list for complete task audit and history.
- * 2. HashSet: O(1) set to enforce unique task identifiers and fast duplicate checking.
- * 3. HashMap: O(1) key-value dictionary for instant task retrieval by ID.
- * 4. PriorityQueue: Min/Max Binary Heap that automatically schedules HIGH priority tasks first.
- * 5. ConcurrentHashMap: Thread-safe map tracking tasks currently in active execution.
+ * Manages in-memory priority scheduling and synchronizes task state
+ * transitions directly into the MySQL database via TaskDao.
  */
 public class TaskManager {
+
+    private final TaskDao taskDao;
 
     // 1. ArrayList: Retains chronological insertion order for history logging
     private final List<Task> taskHistory = new ArrayList<>();
@@ -36,12 +36,18 @@ public class TaskManager {
     // 5. ConcurrentHashMap: Safe for concurrent reads/writes when worker threads pick up tasks
     private final Map<String, Task> activeTasksMap = new ConcurrentHashMap<>();
 
+    public TaskManager() {
+        this(null);
+    }
+
+    public TaskManager(TaskDao taskDao) {
+        this.taskDao = taskDao;
+    }
+
     /**
      * Submits a new task into the system.
-     * Inserts the task into history, registry, lookup map, and priority scheduling queue.
-     *
-     * @param task The task to be scheduled.
-     * @return true if successfully registered, false if already exists (duplicate ID).
+     * Inserts the task into history, registry, lookup map, and priority scheduling queue,
+     * and persists the record to MySQL if TaskDao is configured.
      */
     public synchronized boolean submitTask(Task task) {
         if (task == null) {
@@ -62,6 +68,17 @@ public class TaskManager {
         task.updateStatus(TaskStatus.QUEUED);
         priorityTaskQueue.offer(task);
 
+        if (taskDao != null) {
+            try {
+                taskDao.insertTask(task);
+            } catch (SQLException e) {
+                // If already present in DB, update instead
+                try {
+                    taskDao.updateTask(task);
+                } catch (SQLException ignored) {}
+            }
+        }
+
         return true;
     }
 
@@ -77,6 +94,11 @@ public class TaskManager {
             nextTask.updateStatus(TaskStatus.IN_PROGRESS);
             // Move into ConcurrentHashMap tracking active worker tasks
             activeTasksMap.put(nextTask.getTaskId(), nextTask);
+            if (taskDao != null) {
+                try {
+                    taskDao.updateTask(nextTask);
+                } catch (SQLException ignored) {}
+            }
         }
         return nextTask;
     }
@@ -101,6 +123,13 @@ public class TaskManager {
 
         // Remove from active execution map
         activeTasksMap.remove(taskId);
+
+        if (taskDao != null) {
+            try {
+                taskDao.updateTask(task);
+            } catch (SQLException ignored) {}
+        }
+
         return true;
     }
 
@@ -119,6 +148,13 @@ public class TaskManager {
         task.updateStatus(TaskStatus.CANCELLED);
         priorityTaskQueue.remove(task);
         activeTasksMap.remove(taskId);
+
+        if (taskDao != null) {
+            try {
+                taskDao.updateTask(task);
+            } catch (SQLException ignored) {}
+        }
+
         return true;
     }
 

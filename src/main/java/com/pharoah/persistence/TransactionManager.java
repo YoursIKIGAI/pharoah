@@ -47,8 +47,8 @@ public class TransactionManager {
             System.out.println("[TRANSACTION] Committed successfully.");
             return result;
 
-        } catch (SQLException | RuntimeException e) {
-            System.err.println("[TRANSACTION FAILED] Rolling back changes due to: " + e.getMessage());
+        } catch (Throwable t) {
+            System.err.println("[TRANSACTION FAILED] Rolling back changes due to: " + t.getMessage());
             if (conn != null) {
                 try {
                     conn.rollback(); // 3. Rollback Transaction
@@ -57,7 +57,9 @@ public class TransactionManager {
                     System.err.println("[TRANSACTION ERROR] Failed during rollback: " + rollbackEx.getMessage());
                 }
             }
-            throw e;
+            if (t instanceof SQLException se) throw se;
+            if (t instanceof RuntimeException re) throw re;
+            throw new SQLException("Transaction aborted due to underlying exception: " + t.getMessage(), t);
         } finally {
             if (conn != null) {
                 try {

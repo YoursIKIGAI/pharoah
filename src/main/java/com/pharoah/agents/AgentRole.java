@@ -1,4 +1,4 @@
-package com.pharoah.agent;
+package com.pharoah.agents;
 
 // VARIJ: Implemented AgentRole enum.
 // Defines the 7 specialized agent roles supported by PHAROAH's multi-agent swarm.

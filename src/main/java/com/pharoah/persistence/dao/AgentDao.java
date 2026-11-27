@@ -1,7 +1,7 @@
 package com.pharoah.persistence.dao;
 
-import com.pharoah.agent.AgentConfig;
-import com.pharoah.agent.AgentRole;
+import com.pharoah.agents.AgentConfig;
+import com.pharoah.agents.AgentRole;
 import com.pharoah.persistence.DatabaseConnectionFactory;
 
 import java.sql.*;

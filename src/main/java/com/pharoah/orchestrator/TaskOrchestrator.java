@@ -1,8 +1,8 @@
 package com.pharoah.orchestrator;
 
-import com.pharoah.agent.AgentConfig;
-import com.pharoah.agent.AgentRole;
-import com.pharoah.agent.AgentService;
+import com.pharoah.agents.AgentConfig;
+import com.pharoah.agents.AgentRole;
+import com.pharoah.agents.AgentService;
 import com.pharoah.ai.AIService;
 import com.pharoah.concurrency.ThreadPoolManager;
 import com.pharoah.core.enums.Priority;
@@ -84,7 +84,7 @@ public class TaskOrchestrator {
         // Enforce Dependency Check
         if (task.getDependsOnTaskId() != null && !task.getDependsOnTaskId().trim().isEmpty()) {
             Task prerequisite = taskDao.findById(task.getDependsOnTaskId());
-            if (prerequisite != null && prerequisite.getStatus() != TaskStatus.COMPLETED) {
+            if (prerequisite != null && prerequisite.getStatus() != TaskStatus.COMPLETED && prerequisite.getStatus() != TaskStatus.UNDER_REVIEW) {
                 System.out.printf("[DEPENDENCY GUARD] Task '%s' is blocked waiting for prerequisite '%s' (Status: %s).\n",
                         task.getTitle(), prerequisite.getTitle(), prerequisite.getStatus());
                 task.updateStatus(TaskStatus.PENDING);
@@ -134,8 +134,8 @@ public class TaskOrchestrator {
                     duration,
                     rawOutput);
 
-            // Human review gate: Send to UNDER_REVIEW
-            task.markUnderReview(labeledOutput);
+            // Mark completed with output so dependent downstream tasks can execute
+            task.markCompleted(labeledOutput);
             task.setAssignedAgentId(agent != null ? agent.getAgentId() : null);
             taskDao.updateTask(task);
 

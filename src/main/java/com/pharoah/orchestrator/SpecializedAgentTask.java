@@ -84,12 +84,19 @@ public class SpecializedAgentTask implements Callable<AgentOutput> {
                 Thread.sleep(simulatedWorkDurationMs);
             }
 
-            String content;
+            String content = null;
             // 4. Dispatch: Tool-using agent in Python if enabled and role is researcher
+            boolean toolSuccess = false;
             if (useTools && toolBridge != null && "researcher".equalsIgnoreCase(roleName)) {
-                System.out.printf("  [TOOL] Agent %s is utilizing Python smolagents with web search...\n", deployment.getName());
-                content = toolBridge.runToolAgent(topic, deployment.getResponsibility(), llmClient.getModelName(), "http://localhost:11434", llmClient.isMock());
-            } else {
+                try {
+                    System.out.printf("  [TOOL] Agent %s is utilizing Python smolagents with web search...\n", deployment.getName());
+                    content = toolBridge.runToolAgent(topic, deployment.getResponsibility(), llmClient.getModelName(), "http://localhost:11434", llmClient.isMock());
+                    toolSuccess = true;
+                } catch (Exception ex) {
+                    System.err.printf("  [TOOL WARNING] Python tool agent failed: %s. Falling back cleanly to Java agent execution.\n", ex.getMessage());
+                }
+            }
+            if (!toolSuccess) {
                 // 5. Polymorphic execution through specialized open-source agent in AgentRegistry
                 Agent agent = agentRegistry.getAgentForRole(roleName);
                 if (agent != null) {

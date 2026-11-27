@@ -1,4 +1,4 @@
-package com.pharoah.documents;
+package com.pharoah.document;
 
 import com.pharoah.core.model.Task;
 

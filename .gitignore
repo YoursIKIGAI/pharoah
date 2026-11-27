@@ -1,15 +1,21 @@
 # Compiled build artifacts
 target/
+bin/
 *.class
 
 # SQLite runtime database files
 *.db
 *.db-journal
 
-# Configuration files with real settings (templates are in *.example)
+# Configuration files with local credentials (templates are in *.example)
 config.properties
 db.properties
-src/main/resources/db.properties
+
+# Generated outputs and reports
+outputs/*
+!outputs/.gitkeep
+reports/*
+!reports/.gitkeep
 
 # IDE and Editor files
 .idea/
@@ -27,6 +33,6 @@ Thumbs.db
 __pycache__/
 *.py[cod]
 *$py.class
-
-outputs/*.md
-outputs/*.txt
+*.venv
+env/
+venv/
