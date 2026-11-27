@@ -1,5 +1,6 @@
 package com.pharoah.cli;
 
+import com.pharoah.agents.AgentRegistry;
 import com.pharoah.llm.LlmClient;
 import com.pharoah.orchestrator.*;
 import com.pharoah.persistence.DatabaseConnectionFactory;
@@ -22,6 +23,7 @@ public class PharoahCLI {
     private final WorkflowOrchestrator orchestrator;
     private final boolean useTools;
     private final Scanner scanner;
+    private final AgentRegistry agentRegistry;
 
     private WorkflowPlan lastPlan = null;
 
@@ -37,6 +39,7 @@ public class PharoahCLI {
         this.orchestrator = orchestrator;
         this.useTools = useTools;
         this.scanner = new Scanner(System.in);
+        this.agentRegistry = new AgentRegistry(this.llmClient);
     }
 
     public void startShell() {
@@ -62,7 +65,7 @@ public class PharoahCLI {
             }
 
             if (input.equalsIgnoreCase("/agents")) {
-                showLastPlan();
+                showAgentsDirectory();
                 continue;
             }
 
@@ -131,24 +134,22 @@ public class PharoahCLI {
         }
     }
 
-    private void showLastPlan() {
-        if (lastPlan == null) {
-            System.out.println("\nNo workflow plan has been executed in this session yet.\n");
-            return;
+    private void showAgentsDirectory() {
+        agentRegistry.printAgentDirectory(llmClient.getModelName());
+        if (lastPlan != null) {
+            System.out.println("=".repeat(78));
+            System.out.println("LAST DEPLOYED MULTI-AGENT DAG PLAN");
+            System.out.println("=".repeat(78));
+            System.out.println("Prompt : " + lastPlan.getTopic());
+            System.out.println("Agents : " + lastPlan.getAgents().size());
+            for (AgentDeployment a : lastPlan.getAgents()) {
+                String deps = a.getDependencies().isEmpty() ? "None (Independent)" : String.join(", ", a.getDependencies());
+                System.out.printf("  - [%s] %s (%s) | Priority: %s | Depends: %s\n",
+                        a.getId(), a.getName(), a.getRole(), a.getPriority().getDisplayName(), deps);
+                System.out.printf("    Task: %s\n", a.getResponsibility());
+            }
+            System.out.println("=".repeat(78) + "\n");
         }
-
-        System.out.println("\n" + "=".repeat(76));
-        System.out.println("LAST DEPLOYED MULTI-AGENT PLAN");
-        System.out.println("=".repeat(76));
-        System.out.println("Prompt : " + lastPlan.getTopic());
-        System.out.println("Agents : " + lastPlan.getAgents().size());
-        for (AgentDeployment a : lastPlan.getAgents()) {
-            String deps = a.getDependencies().isEmpty() ? "None" : String.join(", ", a.getDependencies());
-            System.out.printf("  - [%s] %s (%s) | Priority: %s | Depends: %s\n",
-                    a.getId(), a.getName(), a.getRole(), a.getPriority().getDisplayName(), deps);
-            System.out.printf("    Task: %s\n", a.getResponsibility());
-        }
-        System.out.println("=".repeat(76) + "\n");
     }
 
     private void showHistory() {
@@ -177,7 +178,7 @@ public class PharoahCLI {
         System.out.println("=".repeat(76));
         System.out.println("  <any prompt>   Directly enter your research or writing goal to deploy agents.");
         System.out.println("                 Example: write a literature review on AI in cybersecurity, then a critique of it");
-        System.out.println("  /agents        Display the agent decomposition plan from the last run.");
+        System.out.println("  /agents        Display the full open-source agent swarm directory and active DAG plan.");
         System.out.println("  /history       List recent runs retrieved from the database.");
         System.out.println("  /db            Print active database engine, connection info, row counts, & Workbench SQL.");
         System.out.println("  /model         Display active LLM model and provider.");

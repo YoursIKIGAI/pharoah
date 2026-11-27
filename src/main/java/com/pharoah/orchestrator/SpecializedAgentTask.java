@@ -1,16 +1,23 @@
 package com.pharoah.orchestrator;
 
+import com.pharoah.agents.Agent;
+import com.pharoah.agents.AgentRegistry;
 import com.pharoah.bridge.PythonAgentBridge;
+import com.pharoah.core.enums.TaskStatus;
+import com.pharoah.core.enums.TaskType;
+import com.pharoah.core.model.Task;
+import com.pharoah.core.model.TaskResult;
 import com.pharoah.llm.LlmClient;
 import com.pharoah.llm.MockLlmClient;
 import com.pharoah.llm.PromptLoader;
 
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.concurrent.Callable;
 
 // VARIJ: Concurrent task unit executed by worker threads in the ExecutorService.
-// Builds dynamic prompts from (role system prompt + task + dependsOn upstream outputs)
-// and invokes LlmClient (or Python smolagents tool agent when --tools is enabled).
+// Routes execution to polymorphic specialized open-source agents in AgentRegistry,
+// leveraging Ollama LLM reasoning or Python smolagents live search tools.
 public class SpecializedAgentTask implements Callable<AgentOutput> {
 
     private final AgentDeployment deployment;
@@ -20,6 +27,7 @@ public class SpecializedAgentTask implements Callable<AgentOutput> {
     private final PythonAgentBridge toolBridge;
     private final boolean useTools;
     private final long simulatedWorkDurationMs;
+    private final AgentRegistry agentRegistry;
 
     public SpecializedAgentTask(AgentDeployment deployment,
                                 String topic,
@@ -34,6 +42,7 @@ public class SpecializedAgentTask implements Callable<AgentOutput> {
         this.toolBridge = toolBridge;
         this.useTools = useTools;
         this.simulatedWorkDurationMs = 0;
+        this.agentRegistry = new AgentRegistry(this.llmClient);
     }
 
     public SpecializedAgentTask(AgentDeployment deployment, String topic, WorkflowContext context, long simulatedWorkDurationMs) {
@@ -44,6 +53,7 @@ public class SpecializedAgentTask implements Callable<AgentOutput> {
         this.toolBridge = null;
         this.useTools = false;
         this.simulatedWorkDurationMs = Math.max(0, simulatedWorkDurationMs);
+        this.agentRegistry = new AgentRegistry(this.llmClient);
     }
 
     @Override
@@ -56,10 +66,9 @@ public class SpecializedAgentTask implements Callable<AgentOutput> {
             // 1. Retrieve upstream findings from completed dependencies
             String upstreamData = context.getUpstreamSynthesis(deployment.getDependencies());
 
-            // 2. Load system prompt for this agent's specific role from resources/prompts/<role>.txt
+            // 2. Identify agent specialty role
             String roleName = (deployment.getRole() != null && !deployment.getRole().isBlank()) 
                     ? deployment.getRole().toLowerCase() : "researcher";
-            String systemPrompt = PromptLoader.loadPrompt(roleName);
 
             // 3. Construct user prompt combining topic, task, and upstream outputs
             StringBuilder userPromptBuilder = new StringBuilder();
@@ -76,13 +85,36 @@ public class SpecializedAgentTask implements Callable<AgentOutput> {
             }
 
             String content;
-            // 4. Step 4: Tool-using agent in Python if enabled and role is researcher
+            // 4. Dispatch: Tool-using agent in Python if enabled and role is researcher
             if (useTools && toolBridge != null && "researcher".equalsIgnoreCase(roleName)) {
                 System.out.printf("  [TOOL] Agent %s is utilizing Python smolagents with web search...\n", deployment.getName());
                 content = toolBridge.runToolAgent(topic, deployment.getResponsibility(), llmClient.getModelName(), "http://localhost:11434", llmClient.isMock());
             } else {
-                // Real LLM call
-                content = llmClient.chat(systemPrompt, userPromptBuilder.toString());
+                // 5. Polymorphic execution through specialized open-source agent in AgentRegistry
+                Agent agent = agentRegistry.getAgentForRole(roleName);
+                if (agent != null) {
+                    TaskType taskType = resolveTaskType(roleName);
+                    Task task = new Task(
+                            deployment.getId(),
+                            "PHAROAH-RUN",
+                            deployment.getName(),
+                            taskType,
+                            deployment.getPriority(),
+                            userPromptBuilder.toString(),
+                            deployment.getId(),
+                            null,
+                            TaskStatus.PENDING,
+                            null,
+                            null,
+                            LocalDateTime.now(),
+                            null
+                    );
+                    TaskResult result = agent.execute(task, null);
+                    content = result.output();
+                } else {
+                    String systemPrompt = PromptLoader.loadPrompt(roleName);
+                    content = llmClient.chat(systemPrompt, userPromptBuilder.toString());
+                }
             }
 
             if (llmClient.isMock() && !content.startsWith("[MOCK]")) {
@@ -118,5 +150,17 @@ public class SpecializedAgentTask implements Callable<AgentOutput> {
             context.recordOutput(deployment.getId(), failure);
             return failure;
         }
+    }
+
+    private TaskType resolveTaskType(String role) {
+        String r = role.toLowerCase();
+        if (r.contains("analyst") || r.contains("data")) return TaskType.DATA_ANALYSIS;
+        if (r.contains("writer") || r.contains("synthesis") || r.contains("author")) return TaskType.WRITING;
+        if (r.contains("critic") || r.contains("verifier") || r.contains("review")) return TaskType.VERIFICATION;
+        if (r.contains("plan")) return TaskType.PLANNING;
+        if (r.contains("summary") || r.contains("summariser")) return TaskType.DOCUMENT_ANALYSIS;
+        if (r.contains("compare")) return TaskType.COMPARISON;
+        if (r.contains("study") || r.contains("tutor")) return TaskType.STUDY_ASSISTANCE;
+        return TaskType.RESEARCH;
     }
 }

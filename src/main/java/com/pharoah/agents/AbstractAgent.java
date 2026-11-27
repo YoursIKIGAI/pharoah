@@ -52,8 +52,9 @@ public abstract class AbstractAgent implements Agent {
     @Override
     public TaskResult execute(Task task, SubjectMemory memory) {
         long startTime = System.currentTimeMillis();
+        String displayId = task.getTaskId().substring(0, Math.min(8, task.getTaskId().length()));
         System.out.printf("[%s] Commencing execution on Task #%s ('%s')...\n",
-                getName(), task.getTaskId().substring(0, 8), task.getTitle());
+                getName(), displayId, task.getTitle());
 
         try {
             String contextSummary = (memory != null) ? memory.synthesizeContextSummary() : "No Subject Context";
@@ -72,7 +73,7 @@ public abstract class AbstractAgent implements Agent {
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - startTime;
             System.err.printf("[%s ERROR] Failed while processing Task #%s: %s\n",
-                    getName(), task.getTaskId().substring(0, 8), e.getMessage());
+                    getName(), displayId, e.getMessage());
             return TaskResult.failure(task.getTaskId(), e.getMessage(), duration, getName());
         }
     }
